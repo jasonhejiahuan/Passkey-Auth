@@ -63,7 +63,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('id="oauth-logo-button"', body)
         self.assertIn("/static/oauth_authorize.js", body)
-        self.assertNotIn("使用 passkey 登录", body)
+        self.assertNotIn("使用 Passkey 登录", body)
 
     def test_authorize_rejects_unknown_callback(self) -> None:
         response = self.client.get(

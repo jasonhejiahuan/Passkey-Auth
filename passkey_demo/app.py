@@ -318,9 +318,9 @@ def create_app() -> Flask:
 
         user = _current_user(store, session)
         if not user:
-            return _error("请先完成 passkey 登录", 401)
+            return _error("请先完成 Passkey 登录", 401)
         if user.username.casefold() != challenge.username.casefold():
-            return _error("passkey 用户和原网站用户名不匹配", 403)
+            return _error("Passkey 用户和原网站用户名不匹配", 403)
 
         completed = store.complete_oauth_challenge_request(
             challenge_id=challenge.challenge_id,
@@ -395,7 +395,7 @@ def create_app() -> Flask:
 
         user = _current_user(store, session)
         if not user:
-            return _error("请先完成 passkey 登录", 401)
+            return _error("请先完成 Passkey 登录", 401)
 
         code = store.create_oauth_authorization_code(
             client_id=client_id,
@@ -601,11 +601,11 @@ def create_app() -> Flask:
             username = normalize_username(username)
             user = store.get_user_by_username(username)
             if not user:
-                return _error("没有找到这个用户名，请先注册 passkey", 404)
+                return _error("没有找到这个用户名，请先注册 Passkey", 404)
 
             credentials = store.list_credentials_for_user(user.id)
             if not credentials:
-                return _error("这个用户还没有注册 passkey", 404)
+                return _error("这个用户还没有注册 Passkey", 404)
 
         public_key, challenge = build_authentication_options(
             allowed_credentials=[
@@ -631,13 +631,13 @@ def create_app() -> Flask:
         credential_id = base64url_to_bytes(credential_json.get("rawId", ""))
         credential = store.get_credential_by_id(credential_id)
         if not credential:
-            return _error("没有找到对应的 passkey", 404)
+            return _error("没有找到对应的 Passkey", 404)
 
         user = None
         if user_id:
             user = store.get_user_by_id(int(user_id))
             if not user or credential.user_id != user.id:
-                return _error("这个 passkey 不属于当前用户名", 403)
+                return _error("这个 Passkey 不属于当前用户名", 403)
 
         result = verify_authentication(
             credential=credential_json,
@@ -650,15 +650,15 @@ def create_app() -> Flask:
         if result.user_handle:
             handle_user = store.get_user_by_handle(result.user_handle)
             if not handle_user:
-                return _error("没有找到这个 passkey 对应的用户", 404)
+                return _error("没有找到这个 Passkey 对应的用户", 404)
             if handle_user.id != credential.user_id:
-                return _error("passkey 的用户句柄和凭据归属不一致", 403)
+                return _error("Passkey 的用户句柄和凭据归属不一致", 403)
             user = handle_user
 
         if not user:
             user = store.get_user_by_id(credential.user_id)
         if not user:
-            return _error("没有找到这个 passkey 对应的用户", 404)
+            return _error("没有找到这个 Passkey 对应的用户", 404)
 
         store.update_sign_count(result.credential_id, result.new_sign_count)
         session.pop("authentication_challenge", None)

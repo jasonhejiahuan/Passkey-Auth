@@ -3,8 +3,10 @@
 const root = document.querySelector("[data-oauth-authorize]");
 const logoButton = document.querySelector("#oauth-logo-button");
 const statusOutput = document.querySelector("#oauth-status");
+const STATUS_AUTO_HIDE_MS = 10000;
 
 let authorizationInFlight = false;
+let statusHideTimer = 0;
 
 logoButton?.addEventListener("click", authorizeWithPasskey);
 authorizeWithPasskey();
@@ -14,14 +16,14 @@ async function authorizeWithPasskey() {
     return;
   }
 
-  if (!window.PublicKeyCredential) {
-    setStatus("当前浏览器不支持 WebAuthn / passkey", "error");
+  if (!canUsePasskey()) {
+    setStatus(passkeyUnavailableMessage(), "error");
     return;
   }
 
   authorizationInFlight = true;
   logoButton.disabled = true;
-  setStatus("等待浏览器 passkey 操作...", "muted");
+  setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   try {
     const { publicKey } = await postJson("/api/login/options", {
       username: root.dataset.username || "",
@@ -45,7 +47,11 @@ async function authorizeWithPasskey() {
           });
     window.location.assign(result.redirectUrl);
   } catch (error) {
-    setStatus(error.message || String(error), "error");
+    if (isPasskeyCancelError(error)) {
+      setStatus("Passkey 验证已取消", "muted");
+    } else {
+      setStatus(error.message || String(error), "error");
+    }
     logoButton.disabled = false;
     authorizationInFlight = false;
   }
@@ -135,9 +141,38 @@ function bufferToBase64url(buffer) {
     .replace(/=+$/g, "");
 }
 
-function setStatus(message, kind) {
+function isPasskeyCancelError(error) {
+  return (
+    error instanceof DOMException &&
+    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
+  );
+}
+
+function canUsePasskey() {
+  return window.isSecureContext && Boolean(window.PublicKeyCredential);
+}
+
+function passkeyUnavailableMessage() {
+  if (!window.isSecureContext) {
+    return "当前连接不是安全上下文，请使用 HTTPS 或 localhost 打开后再使用 Passkey";
+  }
+  return "当前浏览器不支持 WebAuthn / Passkey";
+}
+
+function setStatus(message, kind, options = {}) {
+  window.clearTimeout(statusHideTimer);
   statusOutput.hidden = false;
   statusOutput.textContent = message;
   statusOutput.className = "status";
   statusOutput.dataset.kind = kind || "";
+
+  if (options.autoHide === false) {
+    return;
+  }
+
+  statusHideTimer = window.setTimeout(() => {
+    statusOutput.hidden = true;
+    statusOutput.textContent = "";
+    statusOutput.dataset.kind = "";
+  }, STATUS_AUTO_HIDE_MS);
 }

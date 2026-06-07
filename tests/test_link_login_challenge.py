@@ -144,7 +144,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
             response.get_json()["error"],
-            "passkey 用户和原网站用户名不匹配",
+            "Passkey 用户和原网站用户名不匹配",
         )
 
 

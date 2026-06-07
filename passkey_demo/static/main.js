@@ -2,6 +2,7 @@
 
 const logoButton = document.querySelector("#logo-button");
 const statusOutput = document.querySelector("#status");
+const STATUS_AUTO_HIDE_MS = 10000;
 
 let logoPrimaryClickCount = 0;
 let logoPrimaryClickTimer = 0;
@@ -9,6 +10,7 @@ let logoSecondaryClickCount = 0;
 let logoSecondaryClickTimer = 0;
 let registerModule = null;
 let registerPanelClosing = false;
+let statusHideTimer = 0;
 
 logoButton.addEventListener("click", handleLogoClick);
 logoButton.addEventListener("pointerdown", handleLogoPointerDown);
@@ -218,17 +220,21 @@ async function refreshSession() {
 }
 
 async function runPasskeyAction(action, options = {}) {
-  if (options.requireWebAuthn !== false && !window.PublicKeyCredential) {
-    setStatus("当前浏览器不支持 WebAuthn / passkey", "error");
+  if (options.requireWebAuthn !== false && !canUsePasskey()) {
+    setStatus(passkeyUnavailableMessage(), "error");
     return;
   }
 
   if (options.revealStatus !== false) {
-    setStatus("等待浏览器 passkey 操作...", "muted");
+    setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   }
   try {
     await action();
   } catch (error) {
+    if (isPasskeyCancelError(error)) {
+      setStatus("Passkey 登录已取消", "muted");
+      return;
+    }
     setStatus(error.message || String(error), "error");
   }
 }
@@ -321,8 +327,37 @@ function bufferToBase64url(buffer) {
     .replace(/=+$/g, "");
 }
 
-function setStatus(message, kind) {
+function isPasskeyCancelError(error) {
+  return (
+    error instanceof DOMException &&
+    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
+  );
+}
+
+function canUsePasskey() {
+  return window.isSecureContext && Boolean(window.PublicKeyCredential);
+}
+
+function passkeyUnavailableMessage() {
+  if (!window.isSecureContext) {
+    return "当前连接不是安全上下文，请使用 HTTPS 或 localhost 打开后再使用 Passkey";
+  }
+  return "当前浏览器不支持 WebAuthn / Passkey";
+}
+
+function setStatus(message, kind, options = {}) {
+  window.clearTimeout(statusHideTimer);
   statusOutput.hidden = false;
   statusOutput.textContent = message;
   statusOutput.dataset.kind = kind;
+
+  if (options.autoHide === false) {
+    return;
+  }
+
+  statusHideTimer = window.setTimeout(() => {
+    statusOutput.hidden = true;
+    statusOutput.textContent = "";
+    statusOutput.dataset.kind = "";
+  }, STATUS_AUTO_HIDE_MS);
 }

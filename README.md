@@ -24,6 +24,8 @@ python3 -m venv .venv
 .venv/bin/python -m passkey_demo.app
 ```
 
+完整 OAuth 接入说明见：[OAuth 接入开发文档](docs/oauth-integration.md)。
+
 然后打开：
 
 ```text

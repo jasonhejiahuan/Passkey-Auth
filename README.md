@@ -73,11 +73,14 @@ PASSKEY_OAUTH_DEMO_CLIENT_SECRET=passkey-demo-secret
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
 PASSKEY_TRUST_PROXY_HEADERS=false
 PASSKEY_HTTP3_ALT_SVC=
+PASSKEY_SERVER_TIMING_ENABLED=true
 ```
 
 `PASSKEY_REGISTRATION_ENABLED` 默认关闭。需要创建新用户时再临时设置为 `true`、`1`、`yes` 或 `on`，避免机器人直接调用注册接口批量创建账号。
 
 HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，Flask 开发服务器本身不提供 HTTP/3。线上部署时设置 `PASSKEY_ORIGIN=https://auth.xxxxx`；如果代理会传递可信 `X-Forwarded-*` 头，再开启 `PASSKEY_TRUST_PROXY_HEADERS=true`。确认代理已经支持 HTTP/3 后，可设置 `PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'` 让 HTTPS 响应宣告 HTTP/3 替代服务。
+
+`PASSKEY_SERVER_TIMING_ENABLED` 默认开启，会发送低敏的 `Server-Timing: app;dur=...`，方便在 Chrome DevTools 的 Network 面板里查看 Flask 应用处理总耗时；不包含 WebAuthn、OAuth、用户或 token 内部细节。
 
 ## 服务端验证 API
 

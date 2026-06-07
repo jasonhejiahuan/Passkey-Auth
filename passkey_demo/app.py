@@ -6,7 +6,7 @@ from base64 import b64decode
 from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from flask import Flask, jsonify, redirect, render_template, request, session
+from flask import Flask, g, jsonify, redirect, render_template, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
@@ -36,9 +36,14 @@ def create_app() -> Flask:
     store = PasskeyStore(config.passkey_database)
 
     @app.after_request
-    def add_modern_protocol_headers(response):
+    def add_observability_and_protocol_headers(response):
+        _apply_server_timing_header(app, response)
         _apply_security_headers(app, response)
         return response
+
+    @app.before_request
+    def start_server_timing():
+        _start_server_timing(app)
 
     @app.get("/")
     def index():
@@ -695,6 +700,27 @@ def _configure_proxy_support(app: Flask) -> None:
         x_for=app.config["PASSKEY_PROXY_FIX_X_FOR"],
         x_proto=app.config["PASSKEY_PROXY_FIX_X_PROTO"],
         x_host=app.config["PASSKEY_PROXY_FIX_X_HOST"],
+    )
+
+
+def _start_server_timing(app: Flask) -> None:
+    if app.config["PASSKEY_SERVER_TIMING_ENABLED"]:
+        g.server_timing_started_at = time.perf_counter()
+
+
+def _apply_server_timing_header(app: Flask, response) -> None:
+    if not app.config["PASSKEY_SERVER_TIMING_ENABLED"]:
+        return
+
+    started_at = getattr(g, "server_timing_started_at", None)
+    if started_at is None:
+        return
+
+    duration_ms = max((time.perf_counter() - started_at) * 1000, 0)
+    app_timing = f"app;dur={duration_ms:.1f}"
+    existing = response.headers.get("Server-Timing")
+    response.headers["Server-Timing"] = (
+        f"{existing}, {app_timing}" if existing else app_timing
     )
 
 

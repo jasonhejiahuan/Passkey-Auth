@@ -19,6 +19,7 @@ class ModernProtocolHeadersTest(unittest.TestCase):
                 "PASSKEY_TRUST_PROXY_HEADERS",
                 "PASSKEY_HTTP3_ALT_SVC",
                 "PASSKEY_HSTS_INCLUDE_SUBDOMAINS",
+                "PASSKEY_SERVER_TIMING_ENABLED",
             )
         }
         os.environ["PASSKEY_DATABASE"] = os.path.join(
@@ -50,8 +51,20 @@ class ModernProtocolHeadersTest(unittest.TestCase):
             response.headers["Permissions-Policy"],
         )
         self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+        self.assertRegex(response.headers["Server-Timing"], r"^app;dur=\d+\.\d$")
         self.assertNotIn("Strict-Transport-Security", response.headers)
         self.assertNotIn("Alt-Svc", response.headers)
+
+    def test_server_timing_can_be_disabled(self) -> None:
+        os.environ["PASSKEY_SERVER_TIMING_ENABLED"] = "false"
+        app = create_app()
+        app.testing = True
+        client = app.test_client()
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Server-Timing", response.headers)
 
     def test_https_response_can_advertise_http3_and_hsts(self) -> None:
         os.environ["PASSKEY_ORIGIN"] = "https://auth.example"

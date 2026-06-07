@@ -71,9 +71,13 @@ PASSKEY_SERVER_API_TOKEN=change-this-server-token
 PASSKEY_OAUTH_DEMO_CLIENT_ID=passkey-demo-client
 PASSKEY_OAUTH_DEMO_CLIENT_SECRET=passkey-demo-secret
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
+PASSKEY_TRUST_PROXY_HEADERS=false
+PASSKEY_HTTP3_ALT_SVC=
 ```
 
 `PASSKEY_REGISTRATION_ENABLED` 默认关闭。需要创建新用户时再临时设置为 `true`、`1`、`yes` 或 `on`，避免机器人直接调用注册接口批量创建账号。
+
+HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，Flask 开发服务器本身不提供 HTTP/3。线上部署时设置 `PASSKEY_ORIGIN=https://auth.xxxxx`；如果代理会传递可信 `X-Forwarded-*` 头，再开启 `PASSKEY_TRUST_PROXY_HEADERS=true`。确认代理已经支持 HTTP/3 后，可设置 `PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'` 让 HTTPS 响应宣告 HTTP/3 替代服务。
 
 ## 服务端验证 API
 
@@ -202,6 +206,8 @@ https://login.xxxxx/callback         原网站回调页
 PASSKEY_RP_ID=xxxxx
 PASSKEY_ORIGIN=https://auth.xxxxx
 PASSKEY_OAUTH_DEMO_REDIRECT_URI=https://login.xxxxx/callback
+PASSKEY_TRUST_PROXY_HEADERS=true
+PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 ```
 
 `PASSKEY_RP_ID=xxxxx` 允许 `auth.xxxxx` 作为 passkey 的 RP 子域使用；浏览器实际打开 Auth WebUI 的 origin 必须和 `PASSKEY_ORIGIN` 一致。

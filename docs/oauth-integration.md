@@ -56,6 +56,8 @@ PASSKEY_OAUTH_DEMO_REDIRECT_URI=https://login.xxxxx/callback
 PASSKEY_OAUTH_CODE_TTL_SECONDS=300
 PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS=3600
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
+PASSKEY_TRUST_PROXY_HEADERS=true
+PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 ```
 
 关键配置说明：
@@ -66,6 +68,8 @@ PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
 - `PASSKEY_OAUTH_DEMO_REDIRECT_URI`：额外允许的业务 callback 地址。
 - `PASSKEY_REGISTRATION_ENABLED`：生产默认保持 `false`，需要开通用户时再短期开启。
 - `PASSKEY_SERVER_API_TOKEN`：服务端验证 API 的 Bearer token，必须只在后端保存。
+- `PASSKEY_TRUST_PROXY_HEADERS`：只在可信反向代理会覆盖 `X-Forwarded-*` 头时开启。
+- `PASSKEY_HTTP3_ALT_SVC`：当 TLS 反向代理已支持 HTTP/3/QUIC 时，用于发送 `Alt-Svc`。
 
 如果部署在子域名 `auth.xxxxx`，常见设置是：
 
@@ -221,6 +225,7 @@ Authorization: Basic base64(client_id:client_secret)
 注意：
 
 - authorization code 只能使用一次。
+- authorization code 只以 PBKDF2 派生值保存，数据库不保存原始 code。
 - `redirect_uri` 必须和发起授权时完全一致。
 - `client_secret` 只能保存在后端。
 - `access_token` 当前是服务端签名 token，不是 JWT。
@@ -554,6 +559,8 @@ static/oauth_authorize.js
 - code/challenge/access token TTL 合理
 - 数据库文件路径持久化且备份
 - 反向代理保留正确 Host 和 HTTPS 信息
+- 可信代理场景已开启 `PASSKEY_TRUST_PROXY_HEADERS=true`
+- 只有确认代理支持 HTTP/3 后才设置 `PASSKEY_HTTP3_ALT_SVC`
 - 业务 callback 必须校验 `state`
 - 业务后端不把 `client_secret`、server token 暴露给浏览器
 
@@ -565,7 +572,21 @@ proxy_set_header X-Forwarded-Proto https;
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 
-如果你的 Flask 部署在代理后面，需要根据部署方式处理 `request.host_url`，或显式设置 `PASSKEY_ORIGIN`，避免 WebAuthn origin 不匹配。
+如果你的 Flask 部署在代理后面，并且这些头只来自可信代理，可以设置：
+
+```bash
+PASSKEY_TRUST_PROXY_HEADERS=true
+```
+
+这会让 Flask 使用代理后的 scheme/host 生成 OAuth redirect URL。仍建议显式设置 `PASSKEY_ORIGIN`，避免 WebAuthn origin 不匹配。
+
+HTTP/3 不是 Flask 应用直接提供的能力；它需要由前置 TLS 代理终止 QUIC。例如 Caddy、NGINX QUIC 构建或 Cloudflare 可以在边缘启用 HTTP/3。确认代理已经支持 HTTP/3 后，再设置：
+
+```bash
+PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
+```
+
+应用只会在 HTTPS 响应中发送该 `Alt-Svc`，本地 HTTP demo 不会宣告 HTTP/3。
 
 ## 错误处理
 

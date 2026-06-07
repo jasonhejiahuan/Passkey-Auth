@@ -4,6 +4,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def _new_flask_secret_key() -> str:
@@ -59,9 +60,41 @@ class AppConfig:
     # SQLite 数据库路径；空值表示使用 Flask instance/passkeys.sqlite3。
     passkey_database: str = ""
 
+    # 是否信任反向代理注入的 X-Forwarded-* 头，用于 HTTPS/HTTP2/HTTP3 终止场景。
+    passkey_trust_proxy_headers: bool = False
+
+    # 代理链中可信 X-Forwarded-For hop 数。
+    passkey_proxy_fix_x_for: int = 1
+
+    # 代理链中可信 X-Forwarded-Proto hop 数。
+    passkey_proxy_fix_x_proto: int = 1
+
+    # 代理链中可信 X-Forwarded-Host hop 数。
+    passkey_proxy_fix_x_host: int = 1
+
+    # HTTP/3 由 TLS 反向代理终止；设置该值后 HTTPS 响应会带 Alt-Svc。
+    passkey_http3_alt_svc: str = ""
+
+    # 是否发送现代浏览器安全响应头。
+    passkey_security_headers_enabled: bool = True
+
+    # HTTPS 响应的 HSTS max-age；0 表示关闭。
+    passkey_hsts_max_age_seconds: int = 31536000
+
+    # HSTS 是否覆盖子域名。
+    passkey_hsts_include_subdomains: bool = False
+
+    # HSTS 是否声明 preload。
+    passkey_hsts_preload: bool = False
+
+    # Flask session cookie 是否仅通过 HTTPS 发送；HTTPS origin 默认开启。
+    passkey_secure_cookies: bool = False
+
     @classmethod
     def from_env(cls, *, instance_path: str | Path) -> AppConfig:
         defaults = cls(passkey_database=str(Path(instance_path) / "passkeys.sqlite3"))
+        passkey_origin = _env_optional_str("PASSKEY_ORIGIN")
+        secure_cookies_default = _origin_is_https(passkey_origin)
         return cls(
             flask_secret_key=_env_str(
                 "FLASK_SECRET_KEY",
@@ -69,7 +102,7 @@ class AppConfig:
             ),
             passkey_rp_id=_env_str("PASSKEY_RP_ID", defaults.passkey_rp_id),
             passkey_rp_name=_env_str("PASSKEY_RP_NAME", defaults.passkey_rp_name),
-            passkey_origin=_env_optional_str("PASSKEY_ORIGIN"),
+            passkey_origin=passkey_origin,
             register_unlock_ttl_seconds=_env_int(
                 "REGISTER_UNLOCK_TTL_SECONDS",
                 defaults.register_unlock_ttl_seconds,
@@ -107,6 +140,46 @@ class AppConfig:
                 defaults.passkey_oauth_challenge_ttl_seconds,
             ),
             passkey_database=_env_str("PASSKEY_DATABASE", defaults.passkey_database),
+            passkey_trust_proxy_headers=_env_bool(
+                "PASSKEY_TRUST_PROXY_HEADERS",
+                default=defaults.passkey_trust_proxy_headers,
+            ),
+            passkey_proxy_fix_x_for=_env_int(
+                "PASSKEY_PROXY_FIX_X_FOR",
+                defaults.passkey_proxy_fix_x_for,
+            ),
+            passkey_proxy_fix_x_proto=_env_int(
+                "PASSKEY_PROXY_FIX_X_PROTO",
+                defaults.passkey_proxy_fix_x_proto,
+            ),
+            passkey_proxy_fix_x_host=_env_int(
+                "PASSKEY_PROXY_FIX_X_HOST",
+                defaults.passkey_proxy_fix_x_host,
+            ),
+            passkey_http3_alt_svc=_env_str(
+                "PASSKEY_HTTP3_ALT_SVC",
+                defaults.passkey_http3_alt_svc,
+            ),
+            passkey_security_headers_enabled=_env_bool(
+                "PASSKEY_SECURITY_HEADERS_ENABLED",
+                default=defaults.passkey_security_headers_enabled,
+            ),
+            passkey_hsts_max_age_seconds=_env_int(
+                "PASSKEY_HSTS_MAX_AGE_SECONDS",
+                defaults.passkey_hsts_max_age_seconds,
+            ),
+            passkey_hsts_include_subdomains=_env_bool(
+                "PASSKEY_HSTS_INCLUDE_SUBDOMAINS",
+                default=defaults.passkey_hsts_include_subdomains,
+            ),
+            passkey_hsts_preload=_env_bool(
+                "PASSKEY_HSTS_PRELOAD",
+                default=defaults.passkey_hsts_preload,
+            ),
+            passkey_secure_cookies=_env_optional_bool(
+                "PASSKEY_SECURE_COOKIES",
+                default=secure_cookies_default,
+            ),
         )
 
     def flask_mapping(self) -> dict[str, object]:
@@ -128,6 +201,18 @@ class AppConfig:
                 self.passkey_oauth_challenge_ttl_seconds
             ),
             "PASSKEY_DATABASE": self.passkey_database,
+            "PASSKEY_TRUST_PROXY_HEADERS": self.passkey_trust_proxy_headers,
+            "PASSKEY_PROXY_FIX_X_FOR": self.passkey_proxy_fix_x_for,
+            "PASSKEY_PROXY_FIX_X_PROTO": self.passkey_proxy_fix_x_proto,
+            "PASSKEY_PROXY_FIX_X_HOST": self.passkey_proxy_fix_x_host,
+            "PASSKEY_HTTP3_ALT_SVC": self.passkey_http3_alt_svc,
+            "PASSKEY_SECURITY_HEADERS_ENABLED": self.passkey_security_headers_enabled,
+            "PASSKEY_HSTS_MAX_AGE_SECONDS": self.passkey_hsts_max_age_seconds,
+            "PASSKEY_HSTS_INCLUDE_SUBDOMAINS": self.passkey_hsts_include_subdomains,
+            "PASSKEY_HSTS_PRELOAD": self.passkey_hsts_preload,
+            "SESSION_COOKIE_HTTPONLY": True,
+            "SESSION_COOKIE_SAMESITE": "Lax",
+            "SESSION_COOKIE_SECURE": self.passkey_secure_cookies,
         }
 
 
@@ -189,3 +274,16 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_optional_bool(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _origin_is_https(origin: str | None) -> bool:
+    if not origin:
+        return False
+    return urlsplit(origin).scheme == "https"

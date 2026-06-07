@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+_OAUTH_CODE_KDF_ALGORITHM = "pbkdf2_sha256"
+_OAUTH_CODE_KDF_ITERATIONS = 120_000
+_OAUTH_CODE_KDF_SALT = b"passkey-auth:oauth-authorization-code:v1"
+
 
 @dataclass(frozen=True)
 class User:
@@ -284,7 +288,7 @@ class PasskeyStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    _hash_oauth_code(code),
+                    _derive_oauth_code_digest(code),
                     client_id,
                     redirect_uri,
                     user_id,
@@ -302,7 +306,7 @@ class PasskeyStore:
         redirect_uri: str,
     ) -> OAuthAuthorizationCode | None:
         now = int(time.time())
-        code_hash = _hash_oauth_code(code)
+        code_hash = _derive_oauth_code_digest(code)
         with self.connect() as conn:
             row = conn.execute(
                 """
@@ -542,5 +546,11 @@ def _oauth_challenge_from_row(row: sqlite3.Row) -> OAuthChallengeRequest:
     )
 
 
-def _hash_oauth_code(code: str) -> str:
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+def _derive_oauth_code_digest(code: str) -> str:
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        code.encode("utf-8"),
+        _OAUTH_CODE_KDF_SALT,
+        _OAUTH_CODE_KDF_ITERATIONS,
+    ).hex()
+    return f"{_OAUTH_CODE_KDF_ALGORITHM}${_OAUTH_CODE_KDF_ITERATIONS}${digest}"

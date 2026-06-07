@@ -16,8 +16,8 @@ async function authorizeWithPasskey() {
     return;
   }
 
-  if (!window.PublicKeyCredential) {
-    setStatus("当前浏览器不支持 WebAuthn / Passkey", "error");
+  if (!canUsePasskey()) {
+    setStatus(passkeyUnavailableMessage(), "error");
     return;
   }
 
@@ -146,6 +146,17 @@ function isPasskeyCancelError(error) {
     error instanceof DOMException &&
     ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
   );
+}
+
+function canUsePasskey() {
+  return window.isSecureContext && Boolean(window.PublicKeyCredential);
+}
+
+function passkeyUnavailableMessage() {
+  if (!window.isSecureContext) {
+    return "当前连接不是安全上下文，请使用 HTTPS 或 localhost 打开后再使用 Passkey";
+  }
+  return "当前浏览器不支持 WebAuthn / Passkey";
 }
 
 function setStatus(message, kind, options = {}) {

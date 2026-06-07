@@ -10,6 +10,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig, ServerConfig
 from .register_client import REGISTER_CLIENT_JS
@@ -30,8 +31,14 @@ def create_app() -> Flask:
     config = AppConfig.from_env(instance_path=app.instance_path)
     app.secret_key = config.flask_secret_key
     app.config.update(config.flask_mapping())
+    _configure_proxy_support(app)
 
     store = PasskeyStore(config.passkey_database)
+
+    @app.after_request
+    def add_modern_protocol_headers(response):
+        _apply_security_headers(app, response)
+        return response
 
     @app.get("/")
     def index():
@@ -677,6 +684,77 @@ def _config(app: Flask) -> WebAuthnConfig:
         rp_name=app.config["PASSKEY_RP_NAME"],
         origin=origin,
     )
+
+
+def _configure_proxy_support(app: Flask) -> None:
+    if not app.config["PASSKEY_TRUST_PROXY_HEADERS"]:
+        return
+
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=app.config["PASSKEY_PROXY_FIX_X_FOR"],
+        x_proto=app.config["PASSKEY_PROXY_FIX_X_PROTO"],
+        x_host=app.config["PASSKEY_PROXY_FIX_X_HOST"],
+    )
+
+
+def _apply_security_headers(app: Flask, response) -> None:
+    if not app.config["PASSKEY_SECURITY_HEADERS_ENABLED"]:
+        return
+
+    _set_header_if_missing(response, "X-Content-Type-Options", "nosniff")
+    _set_header_if_missing(response, "Referrer-Policy", "no-referrer")
+    _set_header_if_missing(
+        response,
+        "Permissions-Policy",
+        "publickey-credentials-create=(self), publickey-credentials-get=(self)",
+    )
+    _set_header_if_missing(
+        response,
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "base-uri 'none'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'"
+        ),
+    )
+
+    if _request_is_https(app):
+        alt_svc = app.config["PASSKEY_HTTP3_ALT_SVC"]
+        if alt_svc:
+            _set_header_if_missing(response, "Alt-Svc", alt_svc)
+
+        hsts = _hsts_header(app)
+        if hsts:
+            _set_header_if_missing(response, "Strict-Transport-Security", hsts)
+
+
+def _request_is_https(app: Flask) -> bool:
+    origin = app.config["PASSKEY_ORIGIN"] or ""
+    return request.is_secure or origin.startswith("https://")
+
+
+def _hsts_header(app: Flask) -> str:
+    max_age = int(app.config["PASSKEY_HSTS_MAX_AGE_SECONDS"] or 0)
+    if max_age <= 0:
+        return ""
+
+    parts = [f"max-age={max_age}"]
+    if app.config["PASSKEY_HSTS_INCLUDE_SUBDOMAINS"]:
+        parts.append("includeSubDomains")
+    if app.config["PASSKEY_HSTS_PRELOAD"]:
+        parts.append("preload")
+    return "; ".join(parts)
+
+
+def _set_header_if_missing(response, name: str, value: str) -> None:
+    if name not in response.headers:
+        response.headers[name] = value
 
 
 def _current_user(store: PasskeyStore, session_data) -> User | None:

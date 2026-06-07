@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import os
 import secrets
 import time
 from base64 import b64decode
 from http.cookies import CookieError, SimpleCookie
-from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Flask, jsonify, redirect, render_template, request, session
@@ -13,6 +11,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
 
+from .config import AppConfig, ServerConfig
 from .register_client import REGISTER_CLIENT_JS
 from .storage import OAuthChallengeRequest, PasskeyStore, User
 from .webauthn_service import (
@@ -28,43 +27,11 @@ from .webauthn_service import (
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
+    config = AppConfig.from_env(instance_path=app.instance_path)
+    app.secret_key = config.flask_secret_key
+    app.config.update(config.flask_mapping())
 
-    app.config["PASSKEY_RP_ID"] = os.getenv("PASSKEY_RP_ID", "localhost")
-    app.config["PASSKEY_RP_NAME"] = os.getenv("PASSKEY_RP_NAME", "Passkey Demo")
-    app.config["PASSKEY_ORIGIN"] = os.getenv("PASSKEY_ORIGIN")
-    app.config["REGISTER_UNLOCK_TTL_SECONDS"] = int(
-        os.getenv("REGISTER_UNLOCK_TTL_SECONDS", "120")
-    )
-    app.config["PASSKEY_REGISTRATION_ENABLED"] = _env_bool(
-        "PASSKEY_REGISTRATION_ENABLED",
-        default=False,
-    )
-    app.config["PASSKEY_SERVER_API_TOKEN"] = os.getenv("PASSKEY_SERVER_API_TOKEN", "")
-    app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = os.getenv(
-        "PASSKEY_OAUTH_DEMO_CLIENT_ID", "passkey-demo-client"
-    )
-    app.config["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = os.getenv(
-        "PASSKEY_OAUTH_DEMO_CLIENT_SECRET", "passkey-demo-secret"
-    )
-    app.config["PASSKEY_OAUTH_DEMO_REDIRECT_URI"] = os.getenv(
-        "PASSKEY_OAUTH_DEMO_REDIRECT_URI", ""
-    )
-    app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"] = int(
-        os.getenv("PASSKEY_OAUTH_CODE_TTL_SECONDS", "300")
-    )
-    app.config["PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS"] = int(
-        os.getenv("PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")
-    )
-    app.config["PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS"] = int(
-        os.getenv("PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS", "300")
-    )
-
-    database_path = os.getenv(
-        "PASSKEY_DATABASE",
-        str(Path(app.instance_path) / "passkeys.sqlite3"),
-    )
-    store = PasskeyStore(database_path)
+    store = PasskeyStore(config.passkey_database)
 
     @app.get("/")
     def index():
@@ -1053,13 +1020,6 @@ def _safe_int(value) -> int:
         return 0
 
 
-def _env_bool(name: str, *, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _registration_enabled(app: Flask) -> bool:
     return bool(app.config["PASSKEY_REGISTRATION_ENABLED"])
 
@@ -1098,7 +1058,9 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    debug = os.getenv("FLASK_DEBUG", "").lower() in {"1", "true", "yes", "on"}
-    host = os.getenv("HOST", "localhost")
-    port = int(os.getenv("PORT", "5003"))
-    app.run(host=host, port=port, debug=debug)
+    server_config = ServerConfig.from_env()
+    app.run(
+        host=server_config.host,
+        port=server_config.port,
+        debug=server_config.debug,
+    )

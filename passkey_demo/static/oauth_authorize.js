@@ -3,8 +3,10 @@
 const root = document.querySelector("[data-oauth-authorize]");
 const logoButton = document.querySelector("#oauth-logo-button");
 const statusOutput = document.querySelector("#oauth-status");
+const STATUS_AUTO_HIDE_MS = 10000;
 
 let authorizationInFlight = false;
+let statusHideTimer = 0;
 
 logoButton?.addEventListener("click", authorizeWithPasskey);
 authorizeWithPasskey();
@@ -15,13 +17,13 @@ async function authorizeWithPasskey() {
   }
 
   if (!window.PublicKeyCredential) {
-    setStatus("当前浏览器不支持 WebAuthn / passkey", "error");
+    setStatus("当前浏览器不支持 WebAuthn / Passkey", "error");
     return;
   }
 
   authorizationInFlight = true;
   logoButton.disabled = true;
-  setStatus("等待浏览器 passkey 操作...", "muted");
+  setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   try {
     const { publicKey } = await postJson("/api/login/options", {
       username: root.dataset.username || "",
@@ -46,7 +48,7 @@ async function authorizeWithPasskey() {
     window.location.assign(result.redirectUrl);
   } catch (error) {
     if (isPasskeyCancelError(error)) {
-      setStatus("passkey 验证已取消", "muted");
+      setStatus("Passkey 验证已取消", "muted");
     } else {
       setStatus(error.message || String(error), "error");
     }
@@ -146,9 +148,20 @@ function isPasskeyCancelError(error) {
   );
 }
 
-function setStatus(message, kind) {
+function setStatus(message, kind, options = {}) {
+  window.clearTimeout(statusHideTimer);
   statusOutput.hidden = false;
   statusOutput.textContent = message;
   statusOutput.className = "status";
   statusOutput.dataset.kind = kind || "";
+
+  if (options.autoHide === false) {
+    return;
+  }
+
+  statusHideTimer = window.setTimeout(() => {
+    statusOutput.hidden = true;
+    statusOutput.textContent = "";
+    statusOutput.dataset.kind = "";
+  }, STATUS_AUTO_HIDE_MS);
 }

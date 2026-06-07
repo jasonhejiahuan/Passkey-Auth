@@ -1,12 +1,8 @@
 # AI Attribution
 
-This file was intentionally created by the repository owner to document transparent support for AI-assisted software development.
-
+This file was issued by the repository owner to document transparent support for AI-assisted software development.
 It does not modify the Apache License 2.0 terms. The license governs use, distribution, warranty, and liability.
-
 This project was developed collaboratively with OpenAI Codex as an AI coding agent.
-
-## Human Direction
 
 Project direction, product intent, repository ownership, release decisions, and review are led by the repository owner, Jason He.
 

@@ -230,7 +230,7 @@ async function runPasskeyAction(action, options = {}) {
     await action();
   } catch (error) {
     if (isPasskeyCancelError(error)) {
-      setStatus("已取消 passkey 登录，点击 Logo 可重试", "muted");
+      setStatus("passkey 登录已取消", "muted");
       return;
     }
     setStatus(error.message || String(error), "error");

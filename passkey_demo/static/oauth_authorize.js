@@ -46,7 +46,7 @@ async function authorizeWithPasskey() {
     window.location.assign(result.redirectUrl);
   } catch (error) {
     if (isPasskeyCancelError(error)) {
-      setStatus("已取消 passkey 验证，点击 Logo 可重试", "muted");
+      setStatus("passkey 验证已取消", "muted");
     } else {
       setStatus(error.message || String(error), "error");
     }

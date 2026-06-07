@@ -16,6 +16,10 @@
 - SQLite 本地存储用户和 credential public key
 - 支持 Chrome、Safari、Firefox、Edge 等现代浏览器
 
+## AI 协作声明
+
+本项目由仓库所有者与 OpenAI Codex 协作开发。贡献范围见 [AI_ATTRIBUTION.md](AI_ATTRIBUTION.md)。
+
 ## 高级文档与 Agent 入口
 
 想了解完整 OAuth / SSO 接入、安全模型、生产部署、扩展方式或 Agent 友好的项目地图，请从 [项目 Wiki](https://github.com/jasonhejiahuan/Passkey-Auth/wiki) 开始。

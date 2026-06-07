@@ -34,6 +34,7 @@ class ConfigTest(unittest.TestCase):
             "PASSKEY_HSTS_INCLUDE_SUBDOMAINS",
             "PASSKEY_HSTS_PRELOAD",
             "PASSKEY_SECURE_COOKIES",
+            "PASSKEY_SERVER_TIMING_ENABLED",
             "FLASK_DEBUG",
             "HOST",
             "PORT",
@@ -74,6 +75,7 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.passkey_hsts_include_subdomains)
         self.assertFalse(config.passkey_hsts_preload)
         self.assertFalse(config.passkey_secure_cookies)
+        self.assertTrue(config.passkey_server_timing_enabled)
         self.assertGreaterEqual(len(config.flask_secret_key), 32)
 
     def test_app_config_env_overrides(self) -> None:
@@ -89,6 +91,7 @@ class ConfigTest(unittest.TestCase):
         os.environ["PASSKEY_HSTS_MAX_AGE_SECONDS"] = "63072000"
         os.environ["PASSKEY_HSTS_INCLUDE_SUBDOMAINS"] = "yes"
         os.environ["PASSKEY_HSTS_PRELOAD"] = "on"
+        os.environ["PASSKEY_SERVER_TIMING_ENABLED"] = "false"
 
         config = AppConfig.from_env(instance_path=self.tempdir.name)
 
@@ -105,6 +108,7 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.passkey_hsts_include_subdomains)
         self.assertTrue(config.passkey_hsts_preload)
         self.assertTrue(config.passkey_secure_cookies)
+        self.assertFalse(config.passkey_server_timing_enabled)
 
     def test_flask_mapping_uses_existing_keys(self) -> None:
         os.environ["PASSKEY_DATABASE"] = "/tmp/passkey-test.sqlite3"
@@ -117,6 +121,7 @@ class ConfigTest(unittest.TestCase):
         self.assertIn("PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS", mapping)
         self.assertEqual(mapping["SESSION_COOKIE_SAMESITE"], "Lax")
         self.assertFalse(mapping["SESSION_COOKIE_SECURE"])
+        self.assertTrue(mapping["PASSKEY_SERVER_TIMING_ENABLED"])
 
     def test_secure_cookie_env_can_override_https_origin_default(self) -> None:
         os.environ["PASSKEY_ORIGIN"] = "https://auth.xxxxx"

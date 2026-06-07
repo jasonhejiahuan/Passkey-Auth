@@ -90,6 +90,9 @@ class AppConfig:
     # Flask session cookie 是否仅通过 HTTPS 发送；HTTPS origin 默认开启。
     passkey_secure_cookies: bool = False
 
+    # 是否发送低敏的 Server-Timing 总耗时，便于浏览器 DevTools 调试。
+    passkey_server_timing_enabled: bool = True
+
     @classmethod
     def from_env(cls, *, instance_path: str | Path) -> AppConfig:
         defaults = cls(passkey_database=str(Path(instance_path) / "passkeys.sqlite3"))
@@ -180,6 +183,10 @@ class AppConfig:
                 "PASSKEY_SECURE_COOKIES",
                 default=secure_cookies_default,
             ),
+            passkey_server_timing_enabled=_env_bool(
+                "PASSKEY_SERVER_TIMING_ENABLED",
+                default=defaults.passkey_server_timing_enabled,
+            ),
         )
 
     def flask_mapping(self) -> dict[str, object]:
@@ -213,6 +220,7 @@ class AppConfig:
             "SESSION_COOKIE_HTTPONLY": True,
             "SESSION_COOKIE_SAMESITE": "Lax",
             "SESSION_COOKIE_SECURE": self.passkey_secure_cookies,
+            "PASSKEY_SERVER_TIMING_ENABLED": self.passkey_server_timing_enabled,
         }
 
 

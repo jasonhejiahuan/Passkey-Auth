@@ -1,4 +1,5 @@
 .DS_Store
+.lh/
 .venv/
 __pycache__/
 **/__pycache__/

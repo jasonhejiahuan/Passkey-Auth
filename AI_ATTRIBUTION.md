@@ -1,10 +1,14 @@
 # AI Attribution
 
+This file was intentionally created by the repository owner to document transparent support for AI-assisted software development.
+
+It does not modify the Apache License 2.0 terms. The license governs use, distribution, warranty, and liability.
+
 This project was developed collaboratively with OpenAI Codex as an AI coding agent.
 
 ## Human Direction
 
-Project direction, product intent, repository ownership, release decisions, and final review are led by the repository owner, Jason He.
+Project direction, product intent, repository ownership, release decisions, and review are led by the repository owner, Jason He.
 
 ## AI Contributions
 
@@ -22,9 +26,11 @@ OpenAI Codex contributed implementation, documentation, and repository-maintenan
 - Developer documentation, Wiki pages, and agent guidance
 - Repository hygiene tasks such as metadata cleanup and public-readiness checks
 
-## Review and Responsibility
+## Owner-Approved Transparency
 
-AI-generated changes were reviewed, directed, and accepted by the repository owner. Users and contributors should treat the repository owner as the authoritative maintainer for project decisions, security posture, licensing, and releases.
+This attribution exists because the repository owner supports open, transparent AI-assisted development. It should not be read as evidence that code was published without human review, nor as a statement that the AI agent added this file independently.
+
+All AI-assisted changes in this repository were made through owner-directed collaboration and were committed through the normal project workflow.
 
 ## Model Disclosure
 

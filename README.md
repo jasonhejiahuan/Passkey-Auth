@@ -18,7 +18,7 @@
 
 ## AI 协作声明
 
-本项目由仓库所有者与 OpenAI Codex 协作开发。贡献范围见 [AI_ATTRIBUTION.md](AI_ATTRIBUTION.md)。
+本项目由仓库所有者与 OpenAI Codex 协作开发。该声明由仓库所有者主动保留，用于透明记录 AI-assisted development；项目授权、免责声明和责任限制以 Apache License 2.0 为准。贡献范围见 [AI_ATTRIBUTION.md](AI_ATTRIBUTION.md)。
 
 ## 高级文档与 Agent 入口
 

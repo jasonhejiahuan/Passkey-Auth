@@ -45,7 +45,11 @@ async function authorizeWithPasskey() {
           });
     window.location.assign(result.redirectUrl);
   } catch (error) {
-    setStatus(error.message || String(error), "error");
+    if (isPasskeyCancelError(error)) {
+      setStatus("已取消 passkey 验证，点击 Logo 可重试", "muted");
+    } else {
+      setStatus(error.message || String(error), "error");
+    }
     logoButton.disabled = false;
     authorizationInFlight = false;
   }
@@ -133,6 +137,13 @@ function bufferToBase64url(buffer) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function isPasskeyCancelError(error) {
+  return (
+    error instanceof DOMException &&
+    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
+  );
 }
 
 function setStatus(message, kind) {

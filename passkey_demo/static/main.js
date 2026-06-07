@@ -229,6 +229,10 @@ async function runPasskeyAction(action, options = {}) {
   try {
     await action();
   } catch (error) {
+    if (isPasskeyCancelError(error)) {
+      setStatus("已取消 passkey 登录，点击 Logo 可重试", "muted");
+      return;
+    }
     setStatus(error.message || String(error), "error");
   }
 }
@@ -319,6 +323,13 @@ function bufferToBase64url(buffer) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function isPasskeyCancelError(error) {
+  return (
+    error instanceof DOMException &&
+    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
+  );
 }
 
 function setStatus(message, kind) {

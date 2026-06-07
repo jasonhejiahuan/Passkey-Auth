@@ -16,6 +16,16 @@
 - SQLite 本地存储用户和 credential public key
 - 支持 Chrome、Safari、Firefox、Edge 等现代浏览器
 
+## 高级文档与 Agent 入口
+
+想了解完整 OAuth / SSO 接入、安全模型、生产部署、扩展方式或 Agent 友好的项目地图，请从 [项目 Wiki](https://github.com/jasonhejiahuan/Passkey-Auth/wiki) 开始。
+
+推荐阅读路径：
+
+- 开发者接入：先读 [Quick Start](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Quick-Start)，再读 [OAuth and SSO Integration](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/OAuth-and-SSO-Integration)
+- 生产部署：读 [Configuration and Deployment](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Configuration-and-Deployment) 和 [Security Model](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security-Model)
+- AI coding agents / vibe coding：请优先读取 [Agents Vibe Coding Guide](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Agents-Vibe-Coding-Guide)，再根据任务查阅功能页；它包含项目地图、安全红线、推荐修改入口和测试策略
+
 ## 运行
 
 ```bash

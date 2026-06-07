@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Northwind Portal Callback</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell partner-shell">
+      <section class="oauth-panel result-panel" aria-labelledby="title">
+        <p class="eyebrow">Northwind Callback</p>
+        {% if ok %}
+          <h1 id="title">已跳回第三方网页</h1>
+          <p class="copy">
+            第三方网页已收到 authorization code，并完成 token 与 userinfo 请求。
+          </p>
+          <dl class="meta">
+            <div>
+              <dt>Username</dt>
+              <dd>{{ userinfo_response.username }}</dd>
+            </div>
+            <div>
+              <dt>Subject</dt>
+              <dd>{{ userinfo_response.sub }}</dd>
+            </div>
+            <div>
+              <dt>Token Type</dt>
+              <dd>{{ token_response.token_type }}</dd>
+            </div>
+            <div>
+              <dt>Expires In</dt>
+              <dd>{{ token_response.expires_in }} seconds</dd>
+            </div>
+          </dl>
+        {% else %}
+          <h1 id="title">跳回失败</h1>
+          <output class="status error">{{ error }} {{ error_description }}</output>
+        {% endif %}
+
+        <section class="debug-section" aria-label="OAuth debug data">
+          <h2>Callback Params</h2>
+          <pre>{{ callback_params | tojson(indent=2) }}</pre>
+          <h2>Token Response</h2>
+          <pre>{{ token_response | tojson(indent=2) }}</pre>
+          <h2>Userinfo Response</h2>
+          <pre>{{ userinfo_response | tojson(indent=2) }}</pre>
+        </section>
+
+        <a class="secondary-link" href="{{ url_for('third_party_demo') }}">返回第三方网页</a>
+      </section>
+    </main>
+  </body>
+</html>

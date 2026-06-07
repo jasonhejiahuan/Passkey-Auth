@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jason Login Callback</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell partner-shell">
+      <section class="oauth-panel result-panel" aria-labelledby="title">
+        <p class="eyebrow">login.xxxxx callback</p>
+        {% if ok %}
+          <h1 id="title">原网站登录成功</h1>
+          <p class="copy">
+            callback 已收到 challenge 成功参数，并在服务端完成签名、状态和一次性消费校验。
+          </p>
+          <dl class="meta">
+            <div>
+              <dt>Username</dt>
+              <dd>{{ user.username }}</dd>
+            </div>
+            <div>
+              <dt>Subject</dt>
+              <dd>{{ user.sub }}</dd>
+            </div>
+          </dl>
+        {% else %}
+          <h1 id="title">原网站登录失败</h1>
+          <output class="status error">{{ error }} {{ error_description }}</output>
+        {% endif %}
+
+        <section class="debug-section" aria-label="Challenge callback debug data">
+          <h2>Callback Params</h2>
+          <pre>{{ callback_params | tojson(indent=2) }}</pre>
+          <h2>Verified User</h2>
+          <pre>{{ user | tojson(indent=2) }}</pre>
+        </section>
+
+        <a class="secondary-link" href="{{ url_for('link_login_demo') }}">返回原网站</a>
+      </section>
+    </main>
+  </body>
+</html>

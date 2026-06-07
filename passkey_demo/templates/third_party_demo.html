@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Northwind Portal</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell partner-shell">
+      <section class="oauth-panel partner-panel" aria-labelledby="title">
+        <p class="eyebrow">Northwind Portal</p>
+        <h1 id="title">团队工作台</h1>
+        <p class="copy">
+          这是一个模拟第三方网页。点击登录后会跳转到 Passkey-Auth，完成 passkey
+          授权后再跳回本站 callback。
+        </p>
+        <dl class="meta">
+          <div>
+            <dt>OAuth Client</dt>
+            <dd>{{ client_id }}</dd>
+          </div>
+          <div>
+            <dt>Callback</dt>
+            <dd>{{ redirect_uri }}</dd>
+          </div>
+        </dl>
+        <a class="primary-link partner-action" href="{{ authorize_url }}">
+          使用 Passkey-Auth 登录
+        </a>
+      </section>
+    </main>
+  </body>
+</html>

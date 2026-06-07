@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OAuth Demo Client</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell">
+      <section class="oauth-panel" aria-labelledby="title">
+        <p class="eyebrow">Backend Client</p>
+        <h1 id="title">OAuth Demo</h1>
+        <dl class="meta">
+          <div>
+            <dt>Client ID</dt>
+            <dd>{{ client_id }}</dd>
+          </div>
+          <div>
+            <dt>Callback</dt>
+            <dd>{{ redirect_uri }}</dd>
+          </div>
+        </dl>
+        <a class="primary-link" href="{{ authorize_url }}">使用 Passkey-Auth 登录</a>
+      </section>
+    </main>
+  </body>
+</html>

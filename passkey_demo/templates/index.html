@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jason Passkey</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script defer src="{{ url_for('static', filename='main.js') }}"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="auth" aria-labelledby="title">
+        <h1 id="title" class="sr-only">Jason Passkey</h1>
+
+        <button class="logo-button" id="logo-button" type="button" aria-label="Jason">
+          <picture class="logo-wrap">
+            <source
+              srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
+              media="(prefers-color-scheme: dark)"
+            >
+            <img
+              class="logo"
+              src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
+              alt="Jason"
+              decoding="async"
+            >
+          </picture>
+        </button>
+
+        <output id="status" class="status" role="status" aria-live="polite" hidden></output>
+      </section>
+    </main>
+  </body>
+</html>

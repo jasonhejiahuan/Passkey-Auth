@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jason Login Portal</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell partner-shell">
+      <section class="oauth-panel partner-panel" aria-labelledby="title">
+        <p class="eyebrow">login.xxxxx demo</p>
+        <h1 id="title">通过 Auth WebUI 登录</h1>
+        <p class="copy">
+          模拟原网站：输入用户名后，后端创建一次性 challenge，并跳转到
+          auth.xxxxx 风格的 passkey 页面。
+        </p>
+
+        {% if error %}
+          <output class="status error">{{ error }}</output>
+        {% endif %}
+
+        <form class="login-form" method="post" action="{{ url_for('link_login_start') }}">
+          <label class="field-label" for="username">Username</label>
+          <input
+            id="username"
+            name="username"
+            class="text-input"
+            type="text"
+            autocomplete="username"
+            placeholder="jason"
+            required
+          >
+          <button class="primary-link partner-action" type="submit">
+            登录
+          </button>
+        </form>
+
+        <dl class="meta">
+          <div>
+            <dt>Client</dt>
+            <dd>{{ client_id }}</dd>
+          </div>
+          <div>
+            <dt>Auth Link</dt>
+            <dd>{{ auth_base_url }}{challenge}</dd>
+          </div>
+          <div>
+            <dt>Callback</dt>
+            <dd>{{ return_uri }}</dd>
+          </div>
+        </dl>
+      </section>
+    </main>
+  </body>
+</html>

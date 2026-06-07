@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OAuth Result</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='oauth.css') }}">
+  </head>
+  <body>
+    <main class="oauth-shell">
+      <section class="oauth-panel" aria-labelledby="title">
+        {% if ok %}
+          <p class="eyebrow">Callback</p>
+          <h1 id="title">登录成功</h1>
+          <dl class="meta">
+            <div>
+              <dt>Authenticated</dt>
+              <dd>{{ token_response.authenticated }}</dd>
+            </div>
+            <div>
+              <dt>Username</dt>
+              <dd>{{ token_response.user.username }}</dd>
+            </div>
+            <div>
+              <dt>Subject</dt>
+              <dd>{{ token_response.user.sub }}</dd>
+            </div>
+            <div>
+              <dt>Token Type</dt>
+              <dd>{{ token_response.token_type }}</dd>
+            </div>
+          </dl>
+          <a class="secondary-link" href="{{ url_for('oauth_demo') }}">重新登录</a>
+        {% else %}
+          <p class="eyebrow">Callback</p>
+          <h1 id="title">登录失败</h1>
+          <output class="status error">{{ error }} {{ error_description }}</output>
+          <a class="secondary-link" href="{{ url_for('oauth_demo') }}">返回 Demo</a>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

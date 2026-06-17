@@ -39,13 +39,25 @@ class AppConfig:
     # 服务端 session 验证 API 的 Bearer token；空值表示不可用。
     passkey_server_api_token: str = ""
 
-    # Demo OAuth client_id。
+    # 标准 OAuth client_id；demo 页面也使用同一套 client 配置。
+    passkey_oauth_client_id: str = "passkey-demo-client"
+
+    # 标准 OAuth client_secret；生产环境请改成强随机值。
+    passkey_oauth_client_secret: str = "passkey-demo-secret"
+
+    # 标准 OAuth client 名称。
+    passkey_oauth_client_name: str = "Passkey OAuth Client"
+
+    # 额外允许的 OAuth callback 列表；使用逗号或换行分隔。
+    passkey_oauth_redirect_uris: str = ""
+
+    # Legacy alias: use PASSKEY_OAUTH_CLIENT_ID for new deployments.
     passkey_oauth_demo_client_id: str = "passkey-demo-client"
 
-    # Demo OAuth client_secret；生产环境请改成强随机值。
+    # Legacy alias: use PASSKEY_OAUTH_CLIENT_SECRET for new deployments.
     passkey_oauth_demo_client_secret: str = "passkey-demo-secret"
 
-    # 额外允许的 OAuth callback；空值表示只允许内置 demo callback。
+    # Legacy alias: use PASSKEY_OAUTH_REDIRECT_URIS for new deployments.
     passkey_oauth_demo_redirect_uri: str = ""
 
     # OAuth authorization code 有效期，单位秒。
@@ -107,6 +119,24 @@ class AppConfig:
         defaults = cls(passkey_database=str(Path(instance_path) / "passkeys.sqlite3"))
         passkey_origin = _env_optional_str("PASSKEY_ORIGIN")
         secure_cookies_default = _origin_is_https(passkey_origin)
+        oauth_client_id = _env_str(
+            "PASSKEY_OAUTH_CLIENT_ID",
+            _env_str("PASSKEY_OAUTH_DEMO_CLIENT_ID", defaults.passkey_oauth_client_id),
+        )
+        oauth_client_secret = _env_str(
+            "PASSKEY_OAUTH_CLIENT_SECRET",
+            _env_str(
+                "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
+                defaults.passkey_oauth_client_secret,
+            ),
+        )
+        oauth_redirect_uris = _env_str(
+            "PASSKEY_OAUTH_REDIRECT_URIS",
+            _env_str(
+                "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
+                defaults.passkey_oauth_redirect_uris,
+            ),
+        )
         return cls(
             flask_secret_key=_env_str(
                 "FLASK_SECRET_KEY",
@@ -127,18 +157,16 @@ class AppConfig:
                 "PASSKEY_SERVER_API_TOKEN",
                 defaults.passkey_server_api_token,
             ),
-            passkey_oauth_demo_client_id=_env_str(
-                "PASSKEY_OAUTH_DEMO_CLIENT_ID",
-                defaults.passkey_oauth_demo_client_id,
+            passkey_oauth_client_id=oauth_client_id,
+            passkey_oauth_client_secret=oauth_client_secret,
+            passkey_oauth_client_name=_env_str(
+                "PASSKEY_OAUTH_CLIENT_NAME",
+                defaults.passkey_oauth_client_name,
             ),
-            passkey_oauth_demo_client_secret=_env_str(
-                "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
-                defaults.passkey_oauth_demo_client_secret,
-            ),
-            passkey_oauth_demo_redirect_uri=_env_str(
-                "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
-                defaults.passkey_oauth_demo_redirect_uri,
-            ),
+            passkey_oauth_redirect_uris=oauth_redirect_uris,
+            passkey_oauth_demo_client_id=oauth_client_id,
+            passkey_oauth_demo_client_secret=oauth_client_secret,
+            passkey_oauth_demo_redirect_uri=oauth_redirect_uris,
             passkey_oauth_code_ttl_seconds=_env_int(
                 "PASSKEY_OAUTH_CODE_TTL_SECONDS",
                 defaults.passkey_oauth_code_ttl_seconds,
@@ -218,6 +246,10 @@ class AppConfig:
             "REGISTER_UNLOCK_TTL_SECONDS": self.register_unlock_ttl_seconds,
             "PASSKEY_REGISTRATION_ENABLED": self.passkey_registration_enabled,
             "PASSKEY_SERVER_API_TOKEN": self.passkey_server_api_token,
+            "PASSKEY_OAUTH_CLIENT_ID": self.passkey_oauth_client_id,
+            "PASSKEY_OAUTH_CLIENT_SECRET": self.passkey_oauth_client_secret,
+            "PASSKEY_OAUTH_CLIENT_NAME": self.passkey_oauth_client_name,
+            "PASSKEY_OAUTH_REDIRECT_URIS": self.passkey_oauth_redirect_uris,
             "PASSKEY_OAUTH_DEMO_CLIENT_ID": self.passkey_oauth_demo_client_id,
             "PASSKEY_OAUTH_DEMO_CLIENT_SECRET": self.passkey_oauth_demo_client_secret,
             "PASSKEY_OAUTH_DEMO_REDIRECT_URI": self.passkey_oauth_demo_redirect_uri,

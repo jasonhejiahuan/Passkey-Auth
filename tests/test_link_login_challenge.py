@@ -18,6 +18,10 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
             for key in (
                 "PASSKEY_DATABASE",
                 "FLASK_SECRET_KEY",
+                "PASSKEY_OAUTH_CLIENT_ID",
+                "PASSKEY_OAUTH_CLIENT_SECRET",
+                "PASSKEY_OAUTH_CLIENT_NAME",
+                "PASSKEY_OAUTH_REDIRECT_URIS",
                 "PASSKEY_OAUTH_DEMO_CLIENT_ID",
                 "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
                 "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
@@ -28,6 +32,10 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
         os.environ["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = "passkey-demo-client"
         os.environ["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = "passkey-demo-secret"
         os.environ.pop("PASSKEY_OAUTH_DEMO_REDIRECT_URI", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_ID", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_SECRET", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_NAME", None)
+        os.environ.pop("PASSKEY_OAUTH_REDIRECT_URIS", None)
         self.app = create_app()
         self.app.testing = True
         self.client = self.app.test_client()

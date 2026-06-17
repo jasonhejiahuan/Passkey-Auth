@@ -17,6 +17,10 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             for key in (
                 "PASSKEY_DATABASE",
                 "FLASK_SECRET_KEY",
+                "PASSKEY_OAUTH_CLIENT_ID",
+                "PASSKEY_OAUTH_CLIENT_SECRET",
+                "PASSKEY_OAUTH_CLIENT_NAME",
+                "PASSKEY_OAUTH_REDIRECT_URIS",
                 "PASSKEY_OAUTH_DEMO_CLIENT_ID",
                 "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
                 "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
@@ -27,6 +31,10 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         os.environ["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = "passkey-demo-client"
         os.environ["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = "passkey-demo-secret"
         os.environ.pop("PASSKEY_OAUTH_DEMO_REDIRECT_URI", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_ID", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_SECRET", None)
+        os.environ.pop("PASSKEY_OAUTH_CLIENT_NAME", None)
+        os.environ.pop("PASSKEY_OAUTH_REDIRECT_URIS", None)
         self.app = create_app()
         self.app.testing = True
         self.client = self.app.test_client()
@@ -80,6 +88,75 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('id="oauth-logo-button"', body)
         self.assertIn('data-redirect-uri="http://localhost:8765/api/auth/callback"', body)
+
+    def test_authorize_accepts_configured_production_callback(self) -> None:
+        os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
+        os.environ["PASSKEY_OAUTH_CLIENT_SECRET"] = "production-secret"
+        os.environ["PASSKEY_OAUTH_CLIENT_NAME"] = "Production Client"
+        os.environ["PASSKEY_OAUTH_REDIRECT_URIS"] = "https://app.example/callback"
+        app = create_app()
+        client = app.test_client()
+
+        response = client.get(
+            "/oauth/authorize",
+            query_string={
+                "response_type": "code",
+                "client_id": "production-client",
+                "redirect_uri": "https://app.example/callback",
+                "state": "state-123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-client-id="production-client"', body)
+        self.assertIn('data-redirect-uri="https://app.example/callback"', body)
+
+    def test_token_exchange_accepts_configured_production_client(self) -> None:
+        os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
+        os.environ["PASSKEY_OAUTH_CLIENT_SECRET"] = "production-secret"
+        os.environ["PASSKEY_OAUTH_REDIRECT_URIS"] = "https://app.example/callback"
+        app = create_app()
+        client = app.test_client()
+        store = PasskeyStore(self.database_path)
+        user = store.create_user("jason", b"stable-user-handle")
+        code = store.create_oauth_authorization_code(
+            client_id="production-client",
+            redirect_uri="https://app.example/callback",
+            user_id=user.id,
+            ttl_seconds=300,
+            code_factory=lambda: "production-code",
+        )
+
+        response = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": "production-client",
+                "client_secret": "production-secret",
+                "code": code,
+                "redirect_uri": "https://app.example/callback",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["token_type"], "Bearer")
+        self.assertEqual(payload["user"]["username"], "jason")
+
+    def test_demo_page_uses_standard_oauth_client_config(self) -> None:
+        os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
+        os.environ["PASSKEY_OAUTH_CLIENT_SECRET"] = "production-secret"
+        app = create_app()
+        client = app.test_client()
+
+        response = client.get("/demo/third-party")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("client_id=production-client", body)
+        self.assertNotIn("client_id=passkey-demo-client", body)
 
     def test_authorize_rejects_unknown_callback(self) -> None:
         response = self.client.get(

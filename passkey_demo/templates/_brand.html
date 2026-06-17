@@ -1,0 +1,31 @@
+{% macro brand_logo(button_id=None, button_label="Jason") -%}
+  {% if button_id %}
+    <button class="logo-button" id="{{ button_id }}" type="button" aria-label="{{ button_label }}">
+      <picture class="logo-wrap">
+        <source
+          srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
+          media="(prefers-color-scheme: dark)"
+        >
+        <img
+          class="logo"
+          src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
+          alt="{{ button_label }}"
+          decoding="async"
+        >
+      </picture>
+    </button>
+  {% else %}
+    <picture class="logo-button logo-wrap" aria-hidden="true">
+      <source
+        srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
+        media="(prefers-color-scheme: dark)"
+      >
+      <img
+        class="logo"
+        src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
+        alt=""
+        decoding="async"
+      >
+    </picture>
+  {% endif %}
+{%- endmacro %}

@@ -1,33 +1,9 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ status_label }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-  </head>
-  <body>
-    <main class="shell">
-      <section class="auth" aria-labelledby="title">
-        <h1 id="title" class="sr-only">{{ status_code }}</h1>
+{% extends "brand_page.html" %}
+{% set page_title = status_label %}
+{% set screen_title = status_code %}
 
-        <picture class="logo-button logo-wrap" aria-hidden="true">
-          <source
-            srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
-            media="(prefers-color-scheme: dark)"
-          >
-          <img
-            class="logo"
-            src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
-            alt=""
-            decoding="async"
-          >
-        </picture>
-
-        <output class="status" data-kind="error" role="status">
-          {{ status_label }}
-        </output>
-      </section>
-    </main>
-  </body>
-</html>
+{% block status %}
+  <output class="status" data-kind="error" role="status">
+    {{ status_label }}
+  </output>
+{% endblock %}

@@ -1,6 +1,6 @@
-# Passkey Auth Demo
+# Passkey Auth
 
-一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册 / 登录 demo。
+一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册、登录、OAuth / SSO 认证服务。
 
 ## 特性
 
@@ -8,9 +8,9 @@
 - 支持注册、用户名登录和无用户名 passkey 登录
 - 浏览器侧接口只返回最小登录状态，不把用户名放进 URL 或普通 UI 响应
 - 提供服务端验证 API，方便作为自建 OAuth / SSO 的身份校验入口
-- 内置 OAuth authorization code flow demo
-- 内置第三方网页跳转和 OAuth 回跳 demo
-- 内置 link challenge flow demo：模拟 `login.xxxxx` 跳转到 `auth.xxxxx/{challenge}`
+- 内置 OAuth authorization code flow
+- 内置第三方网页跳转和 OAuth 回跳示例，复用标准 OAuth client 管道
+- 内置 link challenge flow 示例：模拟 `login.xxxxx` 跳转到 `auth.xxxxx/{challenge}`
 - 使用标准 WebAuthn 浏览器接口：`navigator.credentials.create()` / `navigator.credentials.get()`
 - 后端 passkey 逻辑位于可导入库函数中
 - SQLite 本地存储用户和 credential public key
@@ -68,9 +68,10 @@ PASSKEY_DATABASE=/path/to/passkeys.sqlite3
 FLASK_SECRET_KEY=change-me
 PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_SERVER_API_TOKEN=change-this-server-token
-PASSKEY_OAUTH_DEMO_CLIENT_ID=passkey-demo-client
-PASSKEY_OAUTH_DEMO_CLIENT_SECRET=passkey-demo-secret
-PASSKEY_OAUTH_DEMO_REDIRECT_URI=http://localhost:8765/api/auth/callback
+PASSKEY_OAUTH_CLIENT_ID=passkey-demo-client
+PASSKEY_OAUTH_CLIENT_SECRET=passkey-demo-secret
+PASSKEY_OAUTH_CLIENT_NAME="Passkey OAuth Client"
+PASSKEY_OAUTH_REDIRECT_URIS=http://localhost:8765/api/auth/callback
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
 PASSKEY_TRUST_PROXY_HEADERS=false
 PASSKEY_HTTP3_ALT_SVC=
@@ -122,7 +123,7 @@ Content-Type: application/json
 
 `sub` 来自 WebAuthn user handle，适合作为 OAuth / SSO 场景里的稳定用户标识。这个接口默认只有设置了 `PASSKEY_SERVER_API_TOKEN` 且 Bearer token 匹配时才会返回身份信息。
 
-## OAuth Demo
+## OAuth 与示例页面
 
 启动后打开：
 
@@ -147,7 +148,7 @@ POST /oauth/token
 GET  /oauth/userinfo
 ```
 
-默认 demo client：
+默认 OAuth client：
 
 ```text
 client_id=passkey-demo-client
@@ -155,15 +156,17 @@ client_secret=passkey-demo-secret
 redirect_uri=http://localhost:5002/demo/oauth/callback
 ```
 
-如果你部署到其他域名或端口，设置 `PASSKEY_ORIGIN`，并可用 `PASSKEY_OAUTH_DEMO_REDIRECT_URI` 额外允许一个 callback 地址。OAuth callback URL 里只携带必要的 `code/state`，不会携带 `username`。
+如果你部署到其他域名或端口，设置 `PASSKEY_ORIGIN`，并用 `PASSKEY_OAUTH_CLIENT_ID`、`PASSKEY_OAUTH_CLIENT_SECRET` 和 `PASSKEY_OAUTH_REDIRECT_URIS` 配置生产 client。`PASSKEY_OAUTH_REDIRECT_URIS` 支持逗号或换行分隔多个精确 callback 地址。OAuth callback URL 里只携带必要的 `code/state`，不会携带 `username`。
 
-本地开发时，默认 demo client 也允许 Hyping Web UI 的 callback：
+本地开发时，默认 OAuth client 也允许 Hyping Web UI 的 callback：
 
 ```text
 http://localhost:8765/api/auth/callback
 ```
 
-如果 Hyping 使用了其他端口、域名或 HTTPS 地址，请用 `PASSKEY_OAUTH_DEMO_REDIRECT_URI` 设置为那个精确 callback URL。
+如果 Hyping 使用了其他端口、域名或 HTTPS 地址，请把那个精确 callback URL 加到 `PASSKEY_OAUTH_REDIRECT_URIS`。
+
+旧的 `PASSKEY_OAUTH_DEMO_CLIENT_ID`、`PASSKEY_OAUTH_DEMO_CLIENT_SECRET` 和 `PASSKEY_OAUTH_DEMO_REDIRECT_URI` 仍作为兼容别名读取；新部署建议使用标准 `PASSKEY_OAUTH_CLIENT_*` 配置。
 
 ## 第三方网页跳转和跳回 Demo
 
@@ -217,7 +220,7 @@ https://login.xxxxx/callback         原网站回调页
 ```bash
 PASSKEY_RP_ID=xxxxx
 PASSKEY_ORIGIN=https://auth.xxxxx
-PASSKEY_OAUTH_DEMO_REDIRECT_URI=https://login.xxxxx/callback
+PASSKEY_OAUTH_REDIRECT_URIS=https://login.xxxxx/callback
 PASSKEY_TRUST_PROXY_HEADERS=true
 PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 ```

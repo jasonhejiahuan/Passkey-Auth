@@ -1,52 +1,25 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Jason Passkey</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    {% if ok %}
-      <script defer src="{{ url_for('static', filename='oauth_authorize.js') }}"></script>
-    {% endif %}
-  </head>
-  <body
-    {% if ok %}
-      data-oauth-authorize
-      data-oauth-mode="{{ mode | default('code') }}"
-      data-client-id="{{ client_id }}"
-      data-redirect-uri="{{ redirect_uri }}"
-      data-state="{{ state }}"
-      data-challenge-id="{{ challenge_id | default('') }}"
-      data-username="{{ username | default('') }}"
-    {% endif %}
-  >
-    <main class="shell">
-      <section class="auth" aria-labelledby="title">
-        <h1 id="title" class="sr-only">Jason Passkey</h1>
+{% extends "brand_page.html" %}
+{% from "_brand.html" import brand_logo %}
+{% set page_title = "Jason Passkey" %}
 
-        <button class="logo-button" id="oauth-logo-button" type="button" aria-label="Jason">
-          <picture class="logo-wrap">
-            <source
-              srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
-              media="(prefers-color-scheme: dark)"
-            >
-            <img
-              class="logo"
-              src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
-              alt="Jason"
-              decoding="async"
-            >
-          </picture>
-        </button>
+{% block head_extra %}
+  {% if ok %}
+    <script defer src="{{ url_for('static', filename='oauth_authorize.js') }}"></script>
+  {% endif %}
+{% endblock %}
 
-        {% if ok %}
-          <output id="oauth-status" class="status" role="status" aria-live="polite" hidden></output>
-        {% else %}
-          <output class="status" data-kind="error" role="status">
-            {{ error }} {{ error_description }}
-          </output>
-        {% endif %}
-      </section>
-    </main>
-  </body>
-</html>
+{% block body_attrs %}{% if ok %} data-oauth-authorize data-oauth-mode="{{ mode | default('code') }}" data-client-id="{{ client_id }}" data-redirect-uri="{{ redirect_uri }}" data-state="{{ state }}" data-challenge-id="{{ challenge_id | default('') }}" data-username="{{ username | default('') }}"{% endif %}{% endblock %}
+
+{% block logo %}
+  {{ brand_logo(button_id="oauth-logo-button") }}
+{% endblock %}
+
+{% block status %}
+  {% if ok %}
+    <output id="oauth-status" class="status" role="status" aria-live="polite" hidden></output>
+  {% else %}
+    <output class="status" data-kind="error" role="status">
+      {{ error }} {{ error_description }}
+    </output>
+  {% endif %}
+{% endblock %}

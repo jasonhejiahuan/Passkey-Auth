@@ -1,0 +1,24 @@
+{% from "_brand.html" import brand_logo %}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    {% block head_extra %}{% endblock %}
+  </head>
+  <body{% block body_attrs %}{% endblock %}>
+    <main class="shell">
+      <section class="auth" aria-labelledby="title">
+        <h1 id="title" class="sr-only">{{ screen_title | default(page_title) }}</h1>
+
+        {% block logo %}
+          {{ brand_logo() }}
+        {% endblock %}
+
+        {% block status %}{% endblock %}
+      </section>
+    </main>
+  </body>
+</html>

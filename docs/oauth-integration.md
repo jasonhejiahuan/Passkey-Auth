@@ -50,9 +50,10 @@ PASSKEY_RP_NAME="Passkey Auth"
 PASSKEY_DATABASE=/var/lib/passkey-auth/passkeys.sqlite3
 PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_SERVER_API_TOKEN=change-to-server-token
-PASSKEY_OAUTH_DEMO_CLIENT_ID=your-client-id
-PASSKEY_OAUTH_DEMO_CLIENT_SECRET=your-client-secret
-PASSKEY_OAUTH_DEMO_REDIRECT_URI=https://login.xxxxx/callback
+PASSKEY_OAUTH_CLIENT_ID=your-client-id
+PASSKEY_OAUTH_CLIENT_SECRET=your-client-secret
+PASSKEY_OAUTH_CLIENT_NAME="Your Login Client"
+PASSKEY_OAUTH_REDIRECT_URIS=https://login.xxxxx/callback
 PASSKEY_OAUTH_CODE_TTL_SECONDS=300
 PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS=3600
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
@@ -65,7 +66,9 @@ PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 - `FLASK_SECRET_KEY`：必须固定且保密。access token、challenge result 和 Flask session 都依赖它签名。
 - `PASSKEY_RP_ID`：WebAuthn RP ID。线上通常设置为根域名，例如 `xxxxx`。
 - `PASSKEY_ORIGIN`：Auth WebUI 的真实 HTTPS origin，例如 `https://auth.xxxxx`。
-- `PASSKEY_OAUTH_DEMO_REDIRECT_URI`：额外允许的业务 callback 地址。
+- `PASSKEY_OAUTH_CLIENT_ID`：业务系统使用的 OAuth client id。
+- `PASSKEY_OAUTH_CLIENT_SECRET`：业务系统后端保存的 OAuth client secret。
+- `PASSKEY_OAUTH_REDIRECT_URIS`：允许的业务 callback 地址；支持逗号或换行分隔多个精确 URL。
 - `PASSKEY_REGISTRATION_ENABLED`：生产默认保持 `false`，需要开通用户时再短期开启。
 - `PASSKEY_SERVER_API_TOKEN`：服务端验证 API 的 Bearer token，必须只在后端保存。
 - `PASSKEY_TRUST_PROXY_HEADERS`：只在可信反向代理会覆盖 `X-Forwarded-*` 头时开启。
@@ -119,7 +122,7 @@ GET https://auth.xxxxx/oauth/authorize?response_type=code&client_id=your-client-
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `response_type` | 是 | 固定为 `code` |
-| `client_id` | 是 | `PASSKEY_OAUTH_DEMO_CLIENT_ID` |
+| `client_id` | 是 | `PASSKEY_OAUTH_CLIENT_ID` |
 | `redirect_uri` | 是 | 必须在 Auth 服务允许列表中 |
 | `state` | 是 | 业务站点生成的随机值，用于防 CSRF |
 
@@ -501,7 +504,7 @@ PASSKEY_REGISTRATION_ENABLED=true
 
 ### 多 callback 支持
 
-当前 demo client 默认允许内置 callback：
+标准 OAuth client 默认允许内置示例 callback：
 
 ```text
 /demo/oauth/callback
@@ -509,13 +512,15 @@ PASSKEY_REGISTRATION_ENABLED=true
 /demo/link-login/callback
 ```
 
-额外 callback 通过：
+生产 callback 通过：
 
 ```bash
-PASSKEY_OAUTH_DEMO_REDIRECT_URI=https://login.xxxxx/callback
+PASSKEY_OAUTH_REDIRECT_URIS=https://login.xxxxx/callback,https://app.xxxxx/oauth/callback
 ```
 
-当前代码只有一个 demo client。如果要支持多个业务系统，建议把 `_oauth_client(...)` 改为从数据库或配置文件读取 client 列表，包括：
+当前代码提供一个标准 OAuth client，内置示例页面和生产业务系统都走同一套 client 校验、redirect URI 白名单、authorization code 和 token 管道。旧的 `PASSKEY_OAUTH_DEMO_*` 变量仍作为兼容别名读取；新部署应使用 `PASSKEY_OAUTH_CLIENT_*`。
+
+如果未来要支持多个独立业务系统，可以把 `_oauth_client(...)` 扩展为从数据库或配置文件读取 client 列表，包括：
 
 - `client_id`
 - `client_secret_hash`
@@ -552,7 +557,7 @@ static/oauth_authorize.js
 - `PASSKEY_ORIGIN` 与浏览器访问 Auth WebUI 的 origin 完全一致
 - `PASSKEY_RP_ID` 设置为正确根域或当前域
 - `FLASK_SECRET_KEY` 固定且强随机
-- `PASSKEY_OAUTH_DEMO_CLIENT_SECRET` 已替换
+- `PASSKEY_OAUTH_CLIENT_SECRET` 已替换
 - `PASSKEY_SERVER_API_TOKEN` 已替换
 - `PASSKEY_REGISTRATION_ENABLED=false`
 - callback URL 使用精确白名单

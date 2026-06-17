@@ -79,13 +79,13 @@ def create_app() -> Flask:
     def oauth_demo():
         state = secrets.token_urlsafe(24)
         session["demo_oauth_state"] = state
-        client_id = app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"]
+        client = _default_oauth_client(app)
         redirect_uri = _external_url("/demo/oauth/callback")
         authorize_url = _url_with_params(
             _external_url("/oauth/authorize"),
             {
                 "response_type": "code",
-                "client_id": client_id,
+                "client_id": client["client_id"],
                 "redirect_uri": redirect_uri,
                 "state": state,
             },
@@ -93,7 +93,7 @@ def create_app() -> Flask:
         return render_template(
             "oauth_demo.html",
             authorize_url=authorize_url,
-            client_id=client_id,
+            client_id=client["client_id"],
             redirect_uri=redirect_uri,
         )
 
@@ -124,8 +124,8 @@ def create_app() -> Flask:
             app=app,
             store=store,
             code=request.args.get("code", ""),
-            client_id=app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"],
-            client_secret=app.config["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"],
+            client_id=_default_oauth_client(app)["client_id"],
+            client_secret=_default_oauth_client(app)["client_secret"],
             redirect_uri=_external_url("/demo/oauth/callback"),
         )
         return render_template(
@@ -140,13 +140,13 @@ def create_app() -> Flask:
     def third_party_demo():
         state = secrets.token_urlsafe(24)
         session["third_party_oauth_state"] = state
-        client_id = app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"]
+        client = _default_oauth_client(app)
         redirect_uri = _external_url("/demo/third-party/callback")
         authorize_url = _url_with_params(
             _external_url("/oauth/authorize"),
             {
                 "response_type": "code",
-                "client_id": client_id,
+                "client_id": client["client_id"],
                 "redirect_uri": redirect_uri,
                 "state": state,
             },
@@ -154,15 +154,16 @@ def create_app() -> Flask:
         return render_template(
             "third_party_demo.html",
             authorize_url=authorize_url,
-            client_id=client_id,
+            client_id=client["client_id"],
             redirect_uri=redirect_uri,
         )
 
     @app.get("/demo/link-login")
     def link_login_demo():
+        client = _default_oauth_client(app)
         return render_template(
             "link_login_demo.html",
-            client_id=app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"],
+            client_id=client["client_id"],
             return_uri=_external_url("/demo/link-login/callback"),
             auth_base_url=_external_url("/oauth/challenge/"),
         )
@@ -175,14 +176,14 @@ def create_app() -> Flask:
             return render_template(
                 "link_login_demo.html",
                 error=str(error),
-                client_id=app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"],
+                client_id=_default_oauth_client(app)["client_id"],
                 return_uri=_external_url("/demo/link-login/callback"),
                 auth_base_url=_external_url("/oauth/challenge/"),
             ), 400
 
         state = secrets.token_urlsafe(24)
         session["link_login_state"] = state
-        client_id = app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"]
+        client_id = _default_oauth_client(app)["client_id"]
         return_uri = _external_url("/demo/link-login/callback")
         challenge_id = store.create_oauth_challenge_request(
             client_id=client_id,
@@ -257,8 +258,8 @@ def create_app() -> Flask:
             app=app,
             store=store,
             code=request.args.get("code", ""),
-            client_id=app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"],
-            client_secret=app.config["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"],
+            client_id=_default_oauth_client(app)["client_id"],
+            client_secret=_default_oauth_client(app)["client_secret"],
             redirect_uri=redirect_uri,
         )
         if token_status != 200:
@@ -272,7 +273,7 @@ def create_app() -> Flask:
                 userinfo_response=None,
             )
 
-        userinfo_response, userinfo_status = _fetch_oauth_userinfo_for_demo(
+        userinfo_response, userinfo_status = _fetch_oauth_userinfo(
             app,
             token_response.get("access_token", ""),
         )
@@ -899,26 +900,42 @@ def _server_api_allowed(app: Flask) -> bool:
     return secrets.compare_digest(auth_header[len(prefix) :], token)
 
 
+def _default_oauth_client(app: Flask) -> dict:
+    return {
+        "client_id": app.config["PASSKEY_OAUTH_CLIENT_ID"],
+        "client_secret": app.config["PASSKEY_OAUTH_CLIENT_SECRET"],
+        "name": app.config["PASSKEY_OAUTH_CLIENT_NAME"],
+        "redirect_uris": _default_oauth_redirect_uris(app),
+    }
+
+
 def _oauth_client(app: Flask, client_id: str) -> dict | None:
-    demo_client_id = app.config["PASSKEY_OAUTH_DEMO_CLIENT_ID"]
-    if client_id != demo_client_id:
+    client = _default_oauth_client(app)
+    if client_id != client["client_id"]:
         return None
 
+    return client
+
+
+def _default_oauth_redirect_uris(app: Flask) -> set[str]:
     redirect_uris = {
         _external_url("/demo/oauth/callback"),
         _external_url("/demo/third-party/callback"),
         _external_url("/demo/link-login/callback"),
         "http://localhost:8765/api/auth/callback",
     }
-    configured_redirect_uri = app.config["PASSKEY_OAUTH_DEMO_REDIRECT_URI"]
-    if configured_redirect_uri:
-        redirect_uris.add(configured_redirect_uri)
+    redirect_uris.update(
+        _split_redirect_uris(str(app.config.get("PASSKEY_OAUTH_REDIRECT_URIS") or ""))
+    )
+    return redirect_uris
 
+
+def _split_redirect_uris(value: str) -> set[str]:
     return {
-        "client_id": demo_client_id,
-        "client_secret": app.config["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"],
-        "name": "OAuth Demo Client",
-        "redirect_uris": redirect_uris,
+        item.strip()
+        for line in value.splitlines()
+        for item in line.split(",")
+        if item.strip()
     }
 
 
@@ -944,7 +961,7 @@ def _oauth_client_credentials(data: dict) -> tuple[str, str]:
     return data.get("client_id", ""), data.get("client_secret", "")
 
 
-def _fetch_oauth_userinfo_for_demo(app: Flask, access_token: str) -> tuple[dict, int]:
+def _fetch_oauth_userinfo(app: Flask, access_token: str) -> tuple[dict, int]:
     with app.test_client() as client:
         response = client.get(
             "/oauth/userinfo",

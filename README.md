@@ -70,6 +70,7 @@ PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_SERVER_API_TOKEN=change-this-server-token
 PASSKEY_OAUTH_DEMO_CLIENT_ID=passkey-demo-client
 PASSKEY_OAUTH_DEMO_CLIENT_SECRET=passkey-demo-secret
+PASSKEY_OAUTH_DEMO_REDIRECT_URI=http://localhost:8765/api/auth/callback
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
 PASSKEY_TRUST_PROXY_HEADERS=false
 PASSKEY_HTTP3_ALT_SVC=
@@ -155,6 +156,14 @@ redirect_uri=http://localhost:5002/demo/oauth/callback
 ```
 
 如果你部署到其他域名或端口，设置 `PASSKEY_ORIGIN`，并可用 `PASSKEY_OAUTH_DEMO_REDIRECT_URI` 额外允许一个 callback 地址。OAuth callback URL 里只携带必要的 `code/state`，不会携带 `username`。
+
+本地开发时，默认 demo client 也允许 Hyping Web UI 的 callback：
+
+```text
+http://localhost:8765/api/auth/callback
+```
+
+如果 Hyping 使用了其他端口、域名或 HTTPS 地址，请用 `PASSKEY_OAUTH_DEMO_REDIRECT_URI` 设置为那个精确 callback URL。
 
 ## 第三方网页跳转和跳回 Demo
 

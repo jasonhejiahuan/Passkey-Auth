@@ -35,6 +35,9 @@ class ConfigTest(unittest.TestCase):
             "PASSKEY_HSTS_PRELOAD",
             "PASSKEY_SECURE_COOKIES",
             "PASSKEY_SERVER_TIMING_ENABLED",
+            "PASSKEY_TELEMETRY_TOKEN_URL",
+            "PASSKEY_TELEMETRY_API_KEY",
+            "PASSKEY_TELEMETRY_TIMEOUT_SECONDS",
             "FLASK_DEBUG",
             "HOST",
             "PORT",
@@ -76,6 +79,9 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.passkey_hsts_preload)
         self.assertFalse(config.passkey_secure_cookies)
         self.assertTrue(config.passkey_server_timing_enabled)
+        self.assertEqual(config.passkey_telemetry_token_url, "")
+        self.assertEqual(config.passkey_telemetry_api_key, "")
+        self.assertEqual(config.passkey_telemetry_timeout_seconds, 1.0)
         self.assertGreaterEqual(len(config.flask_secret_key), 32)
 
     def test_app_config_env_overrides(self) -> None:
@@ -92,6 +98,9 @@ class ConfigTest(unittest.TestCase):
         os.environ["PASSKEY_HSTS_INCLUDE_SUBDOMAINS"] = "yes"
         os.environ["PASSKEY_HSTS_PRELOAD"] = "on"
         os.environ["PASSKEY_SERVER_TIMING_ENABLED"] = "false"
+        os.environ["PASSKEY_TELEMETRY_TOKEN_URL"] = "http://127.0.0.1:15000/v12/key/browser-token"
+        os.environ["PASSKEY_TELEMETRY_API_KEY"] = "abcd-abcd-abcd-abcd"
+        os.environ["PASSKEY_TELEMETRY_TIMEOUT_SECONDS"] = "0.5"
 
         config = AppConfig.from_env(instance_path=self.tempdir.name)
 
@@ -109,6 +118,12 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.passkey_hsts_preload)
         self.assertTrue(config.passkey_secure_cookies)
         self.assertFalse(config.passkey_server_timing_enabled)
+        self.assertEqual(
+            config.passkey_telemetry_token_url,
+            "http://127.0.0.1:15000/v12/key/browser-token",
+        )
+        self.assertEqual(config.passkey_telemetry_api_key, "abcd-abcd-abcd-abcd")
+        self.assertEqual(config.passkey_telemetry_timeout_seconds, 0.5)
 
     def test_flask_mapping_uses_existing_keys(self) -> None:
         os.environ["PASSKEY_DATABASE"] = "/tmp/passkey-test.sqlite3"
@@ -122,6 +137,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(mapping["SESSION_COOKIE_SAMESITE"], "Lax")
         self.assertFalse(mapping["SESSION_COOKIE_SECURE"])
         self.assertTrue(mapping["PASSKEY_SERVER_TIMING_ENABLED"])
+        self.assertIn("PASSKEY_TELEMETRY_TOKEN_URL", mapping)
 
     def test_secure_cookie_env_can_override_https_origin_default(self) -> None:
         os.environ["PASSKEY_ORIGIN"] = "https://auth.xxxxx"

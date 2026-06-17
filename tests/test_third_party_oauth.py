@@ -65,6 +65,22 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         self.assertIn("/static/oauth_authorize.js", body)
         self.assertNotIn("使用 Passkey 登录", body)
 
+    def test_authorize_accepts_local_hyping_callback_by_default(self) -> None:
+        response = self.client.get(
+            "/oauth/authorize",
+            query_string={
+                "response_type": "code",
+                "client_id": "passkey-demo-client",
+                "redirect_uri": "http://localhost:8765/api/auth/callback",
+                "state": "state-123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="oauth-logo-button"', body)
+        self.assertIn('data-redirect-uri="http://localhost:8765/api/auth/callback"', body)
+
     def test_authorize_rejects_unknown_callback(self) -> None:
         response = self.client.get(
             "/oauth/authorize",

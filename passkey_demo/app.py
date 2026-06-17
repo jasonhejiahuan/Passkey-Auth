@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import secrets
 import time
+import json
 from base64 import b64decode
+from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Flask, g, jsonify, redirect, render_template, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig, ServerConfig
@@ -37,6 +42,7 @@ def create_app() -> Flask:
 
     @app.after_request
     def add_observability_and_protocol_headers(response):
+        _inject_browser_telemetry(app, response)
         _apply_server_timing_header(app, response)
         _apply_security_headers(app, response)
         return response
@@ -44,6 +50,14 @@ def create_app() -> Flask:
     @app.before_request
     def start_server_timing():
         _start_server_timing(app)
+
+    @app.get("/_error/<int:status_code>")
+    def edge_error(status_code: int):
+        return _render_error_page(status_code)
+
+    @app.errorhandler(HTTPException)
+    def app_error(error: HTTPException):
+        return _render_error_page(error.code or 500)
 
     @app.get("/")
     def index():
@@ -55,6 +69,11 @@ def create_app() -> Flask:
         if not user:
             return jsonify({"authenticated": False})
         return jsonify({"authenticated": True})
+
+    @app.post("/api/telemetry/browser-token")
+    def telemetry_browser_token():
+        payload, status = _create_telemetry_browser_token(app)
+        return _no_store(jsonify(payload)), status
 
     @app.get("/demo/oauth")
     def oauth_demo():
@@ -724,6 +743,79 @@ def _apply_server_timing_header(app: Flask, response) -> None:
     )
 
 
+def _inject_browser_telemetry(app: Flask, response) -> None:
+    if not _browser_telemetry_enabled(app) or response.is_streamed:
+        return
+
+    content_type = response.headers.get("Content-Type", "")
+    if "text/html" not in content_type.lower():
+        return
+
+    body = response.get_data(as_text=True)
+    if "</body>" not in body or "data-passkey-telemetry-status-url" in body:
+        return
+
+    script = (
+        '<script defer src="/static/telemetry.js" '
+        'data-passkey-telemetry-token-url="/api/telemetry/browser-token">'
+        "</script>"
+    )
+    response.set_data(body.replace("</body>", f"{script}</body>", 1))
+
+
+def _browser_telemetry_enabled(app: Flask) -> bool:
+    return bool(
+        str(app.config.get("PASSKEY_TELEMETRY_TOKEN_URL") or "").strip()
+        and str(app.config.get("PASSKEY_TELEMETRY_API_KEY") or "").strip()
+    )
+
+
+def _create_telemetry_browser_token(app: Flask) -> tuple[dict, int]:
+    token_url = str(app.config.get("PASSKEY_TELEMETRY_TOKEN_URL") or "").strip()
+    api_key = str(app.config.get("PASSKEY_TELEMETRY_API_KEY") or "").strip()
+    if not token_url or not api_key:
+        return {"ok": False, "error": "telemetry_not_configured"}, 404
+
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "event": "passkey_auth.browser_visit",
+        "source": "passkey-auth",
+        "path": data.get("path", "") if isinstance(data, dict) else "",
+        "referrer": data.get("referrer", "") if isinstance(data, dict) else "",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    telemetry_request = Request(
+        token_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Api-Key": api_key,
+        },
+        method="POST",
+    )
+    timeout = float(app.config.get("PASSKEY_TELEMETRY_TIMEOUT_SECONDS") or 1.0)
+
+    try:
+        with urlopen(telemetry_request, timeout=timeout) as telemetry_response:
+            response_data = json.loads(telemetry_response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        return {"ok": False, "error": "telemetry_unavailable"}, 503
+
+    if not isinstance(response_data, dict):
+        return {"ok": False, "error": "telemetry_invalid_response"}, 502
+
+    status_url = str(
+        response_data.get("status_url") or response_data.get("statusUrl") or ""
+    ).strip()
+    if not status_url:
+        status_path = str(response_data.get("status_path") or "").strip()
+        status_url = status_path
+    if not status_url:
+        return {"ok": False, "error": "telemetry_missing_status_url"}, 502
+
+    return {"ok": True, "statusUrl": status_url}, 200
+
+
 def _apply_security_headers(app: Flask, response) -> None:
     if not app.config["PASSKEY_SECURITY_HEADERS_ENABLED"]:
         return
@@ -743,7 +835,8 @@ def _apply_security_headers(app: Flask, response) -> None:
             "script-src 'self'; "
             "style-src 'self'; "
             "img-src 'self' data:; "
-            "connect-src 'self'; "
+            "connect-src 'self' https://115.29.205.236:15000; "
+            "frame-src 'self' https://115.29.205.236:15000; "
             "base-uri 'none'; "
             "form-action 'self'; "
             "frame-ancestors 'none'"
@@ -815,6 +908,7 @@ def _oauth_client(app: Flask, client_id: str) -> dict | None:
         _external_url("/demo/oauth/callback"),
         _external_url("/demo/third-party/callback"),
         _external_url("/demo/link-login/callback"),
+        "http://localhost:8765/api/auth/callback",
     }
     configured_redirect_uri = app.config["PASSKEY_OAUTH_DEMO_REDIRECT_URI"]
     if configured_redirect_uri:
@@ -1122,6 +1216,32 @@ def _safe_int(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _render_error_page(status_code: int):
+    safe_status_code = _safe_http_status(status_code)
+    return render_template(
+        "error.html",
+        status_code=safe_status_code,
+        status_label=_error_status_label(status_code, safe_status_code),
+    ), safe_status_code
+
+
+_KNOWN_EDGE_ERROR_STATUSES = {400, 401, 403, 404, 405, 408, 429, 500, 502, 503, 504}
+
+
+def _safe_http_status(status_code: int) -> int:
+    if 400 <= status_code <= 599:
+        return status_code
+    return 404
+
+
+def _error_status_label(status_code: int, safe_status_code: int) -> str:
+    if status_code not in _KNOWN_EDGE_ERROR_STATUSES:
+        return f"{safe_status_code} · Unknown Ungix Error"
+
+    phrase = HTTPStatus(safe_status_code).phrase
+    return f"{status_code} · {phrase}"
 
 
 def _registration_enabled(app: Flask) -> bool:

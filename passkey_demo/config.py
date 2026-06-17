@@ -93,6 +93,15 @@ class AppConfig:
     # 是否发送低敏的 Server-Timing 总耗时，便于浏览器 DevTools 调试。
     passkey_server_timing_enabled: bool = True
 
+    # Jason Telemetry v12 随机浏览器采集口令创建 URL；为空时不注入采集脚本。
+    passkey_telemetry_token_url: str = ""
+
+    # Jason Telemetry v12 服务端 API key；仅服务端使用，不发送给浏览器。
+    passkey_telemetry_api_key: str = ""
+
+    # Jason Telemetry 请求超时，单位秒。
+    passkey_telemetry_timeout_seconds: float = 1.0
+
     @classmethod
     def from_env(cls, *, instance_path: str | Path) -> AppConfig:
         defaults = cls(passkey_database=str(Path(instance_path) / "passkeys.sqlite3"))
@@ -187,6 +196,18 @@ class AppConfig:
                 "PASSKEY_SERVER_TIMING_ENABLED",
                 default=defaults.passkey_server_timing_enabled,
             ),
+            passkey_telemetry_token_url=_env_str(
+                "PASSKEY_TELEMETRY_TOKEN_URL",
+                defaults.passkey_telemetry_token_url,
+            ),
+            passkey_telemetry_api_key=_env_str(
+                "PASSKEY_TELEMETRY_API_KEY",
+                defaults.passkey_telemetry_api_key,
+            ),
+            passkey_telemetry_timeout_seconds=_env_float(
+                "PASSKEY_TELEMETRY_TIMEOUT_SECONDS",
+                defaults.passkey_telemetry_timeout_seconds,
+            ),
         )
 
     def flask_mapping(self) -> dict[str, object]:
@@ -221,6 +242,11 @@ class AppConfig:
             "SESSION_COOKIE_SAMESITE": "Lax",
             "SESSION_COOKIE_SECURE": self.passkey_secure_cookies,
             "PASSKEY_SERVER_TIMING_ENABLED": self.passkey_server_timing_enabled,
+            "PASSKEY_TELEMETRY_TOKEN_URL": self.passkey_telemetry_token_url,
+            "PASSKEY_TELEMETRY_API_KEY": self.passkey_telemetry_api_key,
+            "PASSKEY_TELEMETRY_TIMEOUT_SECONDS": (
+                self.passkey_telemetry_timeout_seconds
+            ),
         }
 
 
@@ -275,6 +301,13 @@ def _env_int(name: str, default: int) -> int:
     if value is None or not value.strip():
         return default
     return int(value)
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return float(value)
 
 
 def _env_bool(name: str, *, default: bool = False) -> bool:

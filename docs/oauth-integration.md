@@ -7,6 +7,7 @@
 Passkey-Auth 是一个基于 WebAuthn/passkey 的认证服务。它负责：
 
 - 在 Auth WebUI 中完成 passkey 验证
+- 在 `/management` 中管理用户权限、OAuth Client 平台和平台访问策略
 - 为业务系统签发 OAuth authorization code 或 challenge 成功参数
 - 提供用户稳定身份标识 `sub`
 - 提供服务端 session 验证 API
@@ -47,7 +48,7 @@ FLASK_SECRET_KEY=change-to-a-long-random-secret
 PASSKEY_RP_ID=xxxxx
 PASSKEY_ORIGIN=https://auth.xxxxx
 PASSKEY_RP_NAME="Passkey Auth"
-PASSKEY_DATABASE=/var/lib/passkey-auth/passkeys.sqlite3
+PASSKEY_DATABASE=/var/lib/passkey-auth/passkeys-v2.sqlite3
 PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_SERVER_API_TOKEN=change-to-server-token
 PASSKEY_OAUTH_CLIENT_ID=your-client-id
@@ -60,6 +61,14 @@ PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
 PASSKEY_TRUST_PROXY_HEADERS=true
 PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 ```
+
+当前数据库是全新的 v2 schema，不迁移旧版 SQLite。新部署应使用一个不存在的数据库路径；
+检测到旧 schema 时应用会拒绝启动。OAuth Client 在首次创建新库时从
+`PASSKEY_OAUTH_CLIENT_*` 导入，之后由 `/management` 持久化管理。
+
+用户必须同时满足 `login=true`、账户未停用、平台策略允许当前 `client_id`；
+内置 Demo 还要求 `demo=true`。这些条件会在授权完成、code 换 token 和 userinfo
+阶段重复验证，权限撤销或 session version 更新会使旧 token 失效。
 
 关键配置说明：
 
@@ -518,7 +527,10 @@ PASSKEY_REGISTRATION_ENABLED=true
 PASSKEY_OAUTH_REDIRECT_URIS=https://login.xxxxx/callback,https://app.xxxxx/oauth/callback
 ```
 
-当前代码提供一个标准 OAuth client，内置示例页面和生产业务系统都走同一套 client 校验、redirect URI 白名单、authorization code 和 token 管道。旧的 `PASSKEY_OAUTH_DEMO_*` 变量仍作为兼容别名读取；新部署应使用 `PASSKEY_OAUTH_CLIENT_*`。
+新数据库会从 `PASSKEY_OAUTH_CLIENT_*` 创建初始 OAuth Client，内置示例页面和
+生产业务系统都走同一套 client 校验、redirect URI 白名单、authorization code
+和 token 管道。之后通过 `/management` 管理平台；旧的
+`PASSKEY_OAUTH_DEMO_*` 变量不再读取。
 
 如果未来要支持多个独立业务系统，可以把 `_oauth_client(...)` 扩展为从数据库或配置文件读取 client 列表，包括：
 

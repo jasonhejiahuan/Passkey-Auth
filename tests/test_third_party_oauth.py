@@ -21,16 +21,10 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
                 "PASSKEY_OAUTH_CLIENT_SECRET",
                 "PASSKEY_OAUTH_CLIENT_NAME",
                 "PASSKEY_OAUTH_REDIRECT_URIS",
-                "PASSKEY_OAUTH_DEMO_CLIENT_ID",
-                "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
-                "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
             )
         }
         os.environ["PASSKEY_DATABASE"] = self.database_path
         os.environ["FLASK_SECRET_KEY"] = "test-secret"
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = "passkey-demo-client"
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = "passkey-demo-secret"
-        os.environ.pop("PASSKEY_OAUTH_DEMO_REDIRECT_URI", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_ID", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_SECRET", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_NAME", None)
@@ -144,6 +138,95 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["token_type"], "Bearer")
         self.assertEqual(payload["user"]["username"], "jason")
+
+    def test_platform_policy_blocks_token_exchange(self) -> None:
+        store = PasskeyStore(self.database_path)
+        user = store.create_user("blocked", b"blocked-user-handle")
+        store.set_platform_policy(
+            user.id,
+            "deny_only",
+            ["passkey-demo-client"],
+        )
+        code = store.create_oauth_authorization_code(
+            client_id="passkey-demo-client",
+            redirect_uri=self.redirect_uri,
+            user_id=user.id,
+            ttl_seconds=300,
+            code_factory=lambda: "blocked-code",
+        )
+
+        response = self.client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": "passkey-demo-client",
+                "client_secret": "passkey-demo-secret",
+                "code": code,
+                "redirect_uri": self.redirect_uri,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "invalid_grant")
+
+    def test_demo_permission_blocks_builtin_demo_redirect(self) -> None:
+        store = PasskeyStore(self.database_path)
+        user = store.create_user("no-demo", b"no-demo-user-handle")
+        store.set_permissions(
+            user.id,
+            {"admin": False, "login": True, "demo": False},
+        )
+        code = store.create_oauth_authorization_code(
+            client_id="passkey-demo-client",
+            redirect_uri=self.redirect_uri,
+            user_id=user.id,
+            ttl_seconds=300,
+            code_factory=lambda: "no-demo-code",
+        )
+
+        response = self.client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": "passkey-demo-client",
+                "client_secret": "passkey-demo-secret",
+                "code": code,
+                "redirect_uri": self.redirect_uri,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "invalid_grant")
+
+    def test_session_version_revokes_existing_access_token(self) -> None:
+        store = PasskeyStore(self.database_path)
+        user = store.create_user("jason", b"stable-token-user")
+        code = store.create_oauth_authorization_code(
+            client_id="passkey-demo-client",
+            redirect_uri=self.redirect_uri,
+            user_id=user.id,
+            ttl_seconds=300,
+            code_factory=lambda: "revocable-code",
+        )
+        token_response = self.client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": "passkey-demo-client",
+                "client_secret": "passkey-demo-secret",
+                "code": code,
+                "redirect_uri": self.redirect_uri,
+            },
+        )
+        access_token = token_response.get_json()["access_token"]
+        store.bump_session_version(user.id)
+
+        response = self.client.get(
+            "/oauth/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_demo_page_uses_standard_oauth_client_config(self) -> None:
         os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"

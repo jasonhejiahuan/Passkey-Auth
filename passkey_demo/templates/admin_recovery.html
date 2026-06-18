@@ -1,0 +1,33 @@
+{% extends "brand_page.html" %}
+{% from "_brand.html" import brand_logo %}
+{% set page_title = "Passkey 管理员注册" %}
+
+{% block head_extra %}
+  <script
+    defer
+    src="{{ url_for('static', filename='admin_recovery.js') }}"
+    data-recovery-token="{{ recovery_token }}"
+  ></script>
+{% endblock %}
+
+{% block logo %}
+  {{ brand_logo(button_id="recovery-logo", button_label="Passkey 管理员注册") }}
+{% endblock %}
+
+{% block status %}
+  <form id="recovery-form" class="form">
+    <label for="recovery-username">管理员用户名</label>
+    <input
+      id="recovery-username"
+      name="username"
+      autocomplete="username webauthn"
+      maxlength="64"
+      placeholder="管理员用户名"
+      required
+    >
+    <div class="actions">
+      <button class="primary" type="submit">注册管理员</button>
+    </div>
+  </form>
+  <output id="recovery-status" class="status" role="status" aria-live="polite" hidden></output>
+{% endblock %}

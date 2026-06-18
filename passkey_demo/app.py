@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import hashlib
 import secrets
 import time
 import json
+import re
+import sys
 from base64 import b64decode
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
@@ -18,6 +22,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig, ServerConfig
+from .management import create_management_blueprint
 from .register_client import REGISTER_CLIENT_JS
 from .storage import OAuthChallengeRequest, PasskeyStore, User
 from .webauthn_service import (
@@ -39,9 +44,24 @@ def create_app() -> Flask:
     _configure_proxy_support(app)
 
     store = PasskeyStore(config.passkey_database)
+    app.extensions["passkey_store"] = store
+    store.bootstrap_oauth_client(
+        client_id=config.passkey_oauth_client_id,
+        name=config.passkey_oauth_client_name,
+        client_secret=config.passkey_oauth_client_secret,
+        redirect_uris=_split_redirect_uris(config.passkey_oauth_redirect_uris)
+        | {"http://localhost:8765/api/auth/callback"},
+    )
+    app.register_blueprint(create_management_blueprint())
 
     @app.after_request
     def add_observability_and_protocol_headers(response):
+        if (
+            request.path == "/management"
+            or request.path.startswith("/api/management/")
+            or str(request.endpoint or "").startswith("admin_recovery")
+        ):
+            response.headers["Cache-Control"] = "no-store"
         _inject_browser_telemetry(app, response)
         _apply_server_timing_header(app, response)
         _apply_security_headers(app, response)
@@ -125,7 +145,7 @@ def create_app() -> Flask:
             store=store,
             code=request.args.get("code", ""),
             client_id=_default_oauth_client(app)["client_id"],
-            client_secret=_default_oauth_client(app)["client_secret"],
+            client_secret=app.config["PASSKEY_OAUTH_CLIENT_SECRET"],
             redirect_uri=_external_url("/demo/oauth/callback"),
         )
         return render_template(
@@ -259,7 +279,7 @@ def create_app() -> Flask:
             store=store,
             code=request.args.get("code", ""),
             client_id=_default_oauth_client(app)["client_id"],
-            client_secret=_default_oauth_client(app)["client_secret"],
+            client_secret=app.config["PASSKEY_OAUTH_CLIENT_SECRET"],
             redirect_uri=redirect_uri,
         )
         if token_status != 200:
@@ -339,6 +359,23 @@ def create_app() -> Flask:
         user = _current_user(store, session)
         if not user:
             return _error("请先完成 Passkey 登录", 401)
+        if not _user_can_access_client(
+            store,
+            user,
+            client,
+            demo_required=_is_demo_redirect(challenge.return_uri),
+        ):
+            store.record_login(
+                user=user,
+                client_id=challenge.client_id,
+                flow="link_challenge",
+                result="denied",
+                credential_hint=None,
+                ip_address=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent", ""),
+                sub=bytes_to_base64url(user.user_handle),
+            )
+            return _error("此账户无权登录该平台", 403)
         if user.username.casefold() != challenge.username.casefold():
             return _error("Passkey 用户和原网站用户名不匹配", 403)
 
@@ -348,6 +385,16 @@ def create_app() -> Flask:
         )
         if not completed:
             return _error("challenge 已完成、已消费或已过期", 400)
+        store.record_login(
+            user=user,
+            client_id=challenge.client_id,
+            flow="link_challenge",
+            result="success",
+            credential_hint=None,
+            ip_address=request.remote_addr or "",
+            user_agent=request.headers.get("User-Agent", ""),
+            sub=bytes_to_base64url(user.user_handle),
+        )
 
         result_token = _issue_challenge_result_token(app, completed, user)
         return _no_store(
@@ -416,6 +463,23 @@ def create_app() -> Flask:
         user = _current_user(store, session)
         if not user:
             return _error("请先完成 Passkey 登录", 401)
+        if not _user_can_access_client(
+            store,
+            user,
+            client,
+            demo_required=_is_demo_redirect(redirect_uri),
+        ):
+            store.record_login(
+                user=user,
+                client_id=client_id,
+                flow="oauth",
+                result="denied",
+                credential_hint=None,
+                ip_address=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent", ""),
+                sub=bytes_to_base64url(user.user_handle),
+            )
+            return _error("此账户无权登录该平台", 403)
 
         code = store.create_oauth_authorization_code(
             client_id=client_id,
@@ -423,6 +487,16 @@ def create_app() -> Flask:
             user_id=user.id,
             ttl_seconds=app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"],
             code_factory=lambda: secrets.token_urlsafe(32),
+        )
+        store.record_login(
+            user=user,
+            client_id=client_id,
+            flow="oauth",
+            result="success",
+            credential_hint=None,
+            ip_address=request.remote_addr or "",
+            user_agent=request.headers.get("User-Agent", ""),
+            sub=bytes_to_base64url(user.user_handle),
         )
         return _no_store(
             jsonify(
@@ -556,19 +630,24 @@ def create_app() -> Flask:
             return _no_store(_error("注册入口未解锁或已过期", 403))
 
         username = normalize_username(data.get("username", ""))
-        user = store.get_or_create_user(username, lambda: secrets.token_bytes(32))
-        credentials = [
-            credential_for_options(credential)
-            for credential in store.list_credentials_for_user(user.id)
-        ]
+        reservation_token = secrets.token_urlsafe(24)
+        if not store.reserve_username(
+            username=username,
+            reservation_token=reservation_token,
+            ttl_seconds=300,
+        ):
+            return _no_store(_error("用户名已注册", 409))
+        user_handle = secrets.token_bytes(32)
         public_key, challenge = build_registration_options(
-            username=user.username,
-            user_handle=user.user_handle,
-            existing_credentials=credentials,
+            username=username,
+            user_handle=user_handle,
+            existing_credentials=[],
             config=_config(app),
         )
         session["registration_challenge"] = challenge
-        session["registration_user_id"] = user.id
+        session["registration_username"] = username
+        session["registration_user_handle"] = bytes_to_base64url(user_handle)
+        session["registration_reservation_token"] = reservation_token
         return _no_store(jsonify({"publicKey": public_key}))
 
     @app.post("/api/register/verify")
@@ -578,14 +657,12 @@ def create_app() -> Flask:
             _clear_registration_state()
             _clear_registration_unlock()
             return _no_store(_error("注册功能未启用", 403))
-        user_id = session.get("registration_user_id")
+        username = session.get("registration_username")
+        user_handle = session.get("registration_user_handle")
+        reservation_token = session.get("registration_reservation_token")
         challenge = session.get("registration_challenge")
-        if not user_id or not challenge:
+        if not username or not user_handle or not reservation_token or not challenge:
             return _error("注册会话已过期，请重新开始注册", 400)
-
-        user = store.get_user_by_id(int(user_id))
-        if not user:
-            return _error("用户不存在，请重新开始注册", 400)
 
         try:
             result = verify_registration(
@@ -597,8 +674,14 @@ def create_app() -> Flask:
             _clear_registration_state()
             raise
 
-        store.save_credential(
-            user_id=user.id,
+        defaults = store.get_registration_settings(
+            default_enabled=app.config["PASSKEY_REGISTRATION_ENABLED"]
+        )
+        user = store.complete_registration(
+            username=str(username),
+            user_handle=base64url_to_bytes(str(user_handle)),
+            reservation_token=str(reservation_token),
+            default_demo_allowed=defaults.default_demo_allowed,
             credential_id=result.credential_id,
             public_key=result.public_key,
             sign_count=result.sign_count,
@@ -608,8 +691,13 @@ def create_app() -> Flask:
             device_type=result.device_type,
             backed_up=result.backed_up,
         )
+        if not user:
+            _clear_registration_state()
+            return _no_store(_error("用户名已注册或注册会话已过期", 409))
         _clear_registration_state()
         session["signed_in_user_id"] = user.id
+        session["signed_in_session_version"] = user.session_version
+        session["management_reauthenticated_at"] = int(time.time())
         return _no_store(jsonify({"ok": True}))
 
     @app.post("/api/login/options")
@@ -622,6 +710,8 @@ def create_app() -> Flask:
             user = store.get_user_by_username(username)
             if not user:
                 return _error("没有找到这个用户名，请先注册 Passkey", 404)
+            if user.disabled_at is not None or not store.get_permissions(user.id)["login"]:
+                return _error("此账户当前不允许登录", 403)
 
             credentials = store.list_credentials_for_user(user.id)
             if not credentials:
@@ -659,13 +749,31 @@ def create_app() -> Flask:
             if not user or credential.user_id != user.id:
                 return _error("这个 Passkey 不属于当前用户名", 403)
 
-        result = verify_authentication(
-            credential=credential_json,
-            expected_challenge=challenge,
-            credential_public_key=credential.public_key,
-            credential_current_sign_count=credential.sign_count,
-            config=_config(app),
-        )
+        try:
+            result = verify_authentication(
+                credential=credential_json,
+                expected_challenge=challenge,
+                credential_public_key=credential.public_key,
+                credential_current_sign_count=credential.sign_count,
+                config=_config(app),
+            )
+        except WebAuthnException:
+            failed_user = user or store.get_user_by_id(credential.user_id)
+            store.record_login(
+                user=failed_user,
+                client_id=None,
+                flow="passkey",
+                result="failed",
+                credential_hint=bytes_to_base64url(credential_id)[:16],
+                ip_address=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent", ""),
+                sub=bytes_to_base64url(failed_user.user_handle)
+                if failed_user
+                else None,
+            )
+            session.pop("authentication_challenge", None)
+            session.pop("authentication_user_id", None)
+            raise
 
         if result.user_handle:
             handle_user = store.get_user_by_handle(result.user_handle)
@@ -679,17 +787,126 @@ def create_app() -> Flask:
             user = store.get_user_by_id(credential.user_id)
         if not user:
             return _error("没有找到这个 Passkey 对应的用户", 404)
+        if user.disabled_at is not None or not store.get_permissions(user.id)["login"]:
+            store.record_login(
+                user=user,
+                client_id=None,
+                flow="passkey",
+                result="denied",
+                credential_hint=bytes_to_base64url(credential_id)[:16],
+                ip_address=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent", ""),
+                sub=bytes_to_base64url(user.user_handle),
+            )
+            return _error("此账户当前不允许登录", 403)
 
         store.update_sign_count(result.credential_id, result.new_sign_count)
         session.pop("authentication_challenge", None)
         session.pop("authentication_user_id", None)
         session["signed_in_user_id"] = user.id
+        session["signed_in_session_version"] = user.session_version
+        session["management_reauthenticated_at"] = int(time.time())
+        store.record_login(
+            user=user,
+            client_id=None,
+            flow="passkey",
+            result="success",
+            credential_hint=bytes_to_base64url(result.credential_id)[:16],
+            ip_address=request.remote_addr or "",
+            user_agent=request.headers.get("User-Agent", ""),
+            sub=bytes_to_base64url(user.user_handle),
+        )
         return jsonify({"ok": True})
 
     @app.post("/api/logout")
     def logout():
         session.clear()
         return jsonify({"ok": True})
+
+    @app.get("/<recovery_token>")
+    def admin_recovery_page(recovery_token: str):
+        if not store.admin_recovery_available(recovery_token):
+            return _render_error_page(404)
+        return _no_store(
+            app.make_response(
+                render_template(
+                    "admin_recovery.html",
+                    recovery_token=recovery_token,
+                )
+            )
+        )
+
+    @app.post("/<recovery_token>/options")
+    def admin_recovery_options(recovery_token: str):
+        if not store.admin_recovery_available(recovery_token):
+            return _no_store(_error("恢复入口不存在或已使用", 404))
+        data = request.get_json(force=True)
+        username = normalize_username(data.get("username", ""))
+        reservation_token = secrets.token_urlsafe(24)
+        if not store.reserve_username(
+            username=username,
+            reservation_token=reservation_token,
+            ttl_seconds=300,
+        ):
+            return _no_store(_error("用户名已注册", 409))
+        user_handle = secrets.token_bytes(32)
+        public_key, challenge = build_registration_options(
+            username=username,
+            user_handle=user_handle,
+            existing_credentials=[],
+            config=_config(app),
+        )
+        session["admin_recovery_challenge"] = challenge
+        session["admin_recovery_username"] = username
+        session["admin_recovery_user_handle"] = bytes_to_base64url(user_handle)
+        session["admin_recovery_reservation_token"] = reservation_token
+        session["admin_recovery_token_hash"] = _admin_recovery_session_digest(
+            recovery_token
+        )
+        return _no_store(jsonify({"publicKey": public_key}))
+
+    @app.post("/<recovery_token>/verify")
+    def admin_recovery_verify(recovery_token: str):
+        data = request.get_json(force=True)
+        challenge = session.get("admin_recovery_challenge")
+        username = session.get("admin_recovery_username")
+        user_handle = session.get("admin_recovery_user_handle")
+        reservation_token = session.get("admin_recovery_reservation_token")
+        if (
+            not challenge
+            or not username
+            or not user_handle
+            or not reservation_token
+            or session.get("admin_recovery_token_hash")
+            != _admin_recovery_session_digest(recovery_token)
+        ):
+            return _no_store(_error("管理员注册会话已过期", 400))
+        result = verify_registration(
+            credential=data.get("credential", {}),
+            expected_challenge=challenge,
+            config=_config(app),
+        )
+        user = store.complete_admin_recovery(
+            token=recovery_token,
+            username=str(username),
+            user_handle=base64url_to_bytes(str(user_handle)),
+            reservation_token=str(reservation_token),
+            credential_id=result.credential_id,
+            public_key=result.public_key,
+            sign_count=result.sign_count,
+            transports=result.transports,
+            aaguid=result.aaguid,
+            credential_type=result.credential_type,
+            device_type=result.device_type,
+            backed_up=result.backed_up,
+        )
+        _clear_admin_recovery_state()
+        if not user:
+            return _no_store(_error("恢复入口已使用或用户名已注册", 409))
+        session["signed_in_user_id"] = user.id
+        session["signed_in_session_version"] = user.session_version
+        session["management_reauthenticated_at"] = int(time.time())
+        return _no_store(jsonify({"ok": True, "redirectUrl": "/management"}))
 
     @app.errorhandler(ValueError)
     def value_error(error: ValueError):
@@ -745,6 +962,12 @@ def _apply_server_timing_header(app: Flask, response) -> None:
 
 
 def _inject_browser_telemetry(app: Flask, response) -> None:
+    if (
+        request.path == "/management"
+        or request.path.startswith("/api/management/")
+        or str(request.endpoint or "").startswith("admin_recovery")
+    ):
+        return
     if not _browser_telemetry_enabled(app) or response.is_streamed:
         return
 
@@ -881,14 +1104,34 @@ def _current_user(store: PasskeyStore, session_data) -> User | None:
     user_id = session_data.get("signed_in_user_id")
     if user_id:
         user = store.get_user_by_id(_safe_int(user_id))
-        if user:
+        if (
+            user
+            and user.disabled_at is None
+            and session_data.get("signed_in_session_version") == user.session_version
+            and store.get_permissions(user.id)["login"]
+        ):
             return user
 
-    username = session_data.get("signed_in_username")
-    if username:
-        return store.get_user_by_username(str(username))
-
     return None
+
+
+def _user_can_access_client(
+    store: PasskeyStore,
+    user: User,
+    client: dict,
+    *,
+    demo_required: bool = False,
+) -> bool:
+    permissions = store.get_permissions(user.id)
+    if user.disabled_at is not None or not permissions["login"]:
+        return False
+    if demo_required and not permissions["demo"]:
+        return False
+    return store.platform_allowed(user.id, str(client["client_id"]))
+
+
+def _is_demo_redirect(redirect_uri: str) -> bool:
+    return urlsplit(redirect_uri).path.startswith("/demo/")
 
 
 def _server_api_allowed(app: Flask) -> bool:
@@ -901,33 +1144,32 @@ def _server_api_allowed(app: Flask) -> bool:
 
 
 def _default_oauth_client(app: Flask) -> dict:
-    return {
-        "client_id": app.config["PASSKEY_OAUTH_CLIENT_ID"],
-        "client_secret": app.config["PASSKEY_OAUTH_CLIENT_SECRET"],
-        "name": app.config["PASSKEY_OAUTH_CLIENT_NAME"],
-        "redirect_uris": _default_oauth_redirect_uris(app),
-    }
-
-
-def _oauth_client(app: Flask, client_id: str) -> dict | None:
-    client = _default_oauth_client(app)
-    if client_id != client["client_id"]:
-        return None
-
+    client = _oauth_client(app, app.config["PASSKEY_OAUTH_CLIENT_ID"])
+    if not client:
+        raise RuntimeError("默认 OAuth Client 未配置")
     return client
 
 
-def _default_oauth_redirect_uris(app: Flask) -> set[str]:
-    redirect_uris = {
-        _external_url("/demo/oauth/callback"),
-        _external_url("/demo/third-party/callback"),
-        _external_url("/demo/link-login/callback"),
-        "http://localhost:8765/api/auth/callback",
+def _oauth_client(app: Flask, client_id: str) -> dict | None:
+    store: PasskeyStore = app.extensions["passkey_store"]
+    stored = store.get_oauth_client(client_id)
+    if not stored or not stored.enabled:
+        return None
+    redirect_uris = set(stored.redirect_uris)
+    if stored.is_demo:
+        redirect_uris.update(
+            {
+                _external_url("/demo/oauth/callback"),
+                _external_url("/demo/third-party/callback"),
+                _external_url("/demo/link-login/callback"),
+            }
+        )
+    return {
+        "client_id": stored.client_id,
+        "name": stored.name,
+        "redirect_uris": redirect_uris,
+        "is_demo": stored.is_demo,
     }
-    redirect_uris.update(
-        _split_redirect_uris(str(app.config.get("PASSKEY_OAUTH_REDIRECT_URIS") or ""))
-    )
-    return redirect_uris
 
 
 def _split_redirect_uris(value: str) -> set[str]:
@@ -986,10 +1228,7 @@ def _exchange_authorization_code(
     redirect_uri: str,
 ) -> tuple[dict, int]:
     client = _oauth_client(app, client_id)
-    if not client or not secrets.compare_digest(
-        client_secret or "",
-        client["client_secret"],
-    ):
+    if not client or not store.verify_oauth_client_secret(client_id, client_secret or ""):
         return {
             "ok": False,
             "error": "invalid_client",
@@ -1016,17 +1255,27 @@ def _exchange_authorization_code(
         }, 400
 
     user = store.get_user_by_id(oauth_code.user_id)
-    if not user:
+    if not user or not _user_can_access_client(
+        store,
+        user,
+        client,
+        demo_required=_is_demo_redirect(redirect_uri),
+    ):
         return {
             "ok": False,
             "error": "invalid_grant",
-            "error_description": "authorization code 对应的用户不存在",
+            "error_description": "authorization code 对应用户不存在或无权访问",
         }, 400
 
     expires_in = app.config["PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS"]
     return {
         "ok": True,
-        "access_token": _issue_access_token(app, user),
+        "access_token": _issue_access_token(
+            app,
+            user,
+            client_id,
+            demo_required=_is_demo_redirect(redirect_uri),
+        ),
         "token_type": "Bearer",
         "expires_in": expires_in,
         "authenticated": True,
@@ -1034,7 +1283,13 @@ def _exchange_authorization_code(
     }, 200
 
 
-def _issue_access_token(app: Flask, user: User) -> str:
+def _issue_access_token(
+    app: Flask,
+    user: User,
+    client_id: str,
+    *,
+    demo_required: bool,
+) -> str:
     serializer = URLSafeTimedSerializer(
         app.secret_key,
         salt="passkey-oauth-access-token",
@@ -1043,6 +1298,9 @@ def _issue_access_token(app: Flask, user: User) -> str:
         {
             "user_id": user.id,
             "sub": bytes_to_base64url(user.user_handle),
+            "session_version": user.session_version,
+            "client_id": client_id,
+            "demo_required": demo_required,
         }
     )
 
@@ -1142,7 +1400,21 @@ def _user_from_access_token(app: Flask, store: PasskeyStore) -> User | None:
     if not isinstance(data, dict):
         return None
     user = store.get_user_by_id(_safe_int(data.get("user_id")))
-    if not user or data.get("sub") != bytes_to_base64url(user.user_handle):
+    if (
+        not user
+        or user.disabled_at is not None
+        or data.get("sub") != bytes_to_base64url(user.user_handle)
+        or data.get("session_version") != user.session_version
+        or not store.get_permissions(user.id)["login"]
+    ):
+        return None
+    client = _oauth_client(app, str(data.get("client_id") or ""))
+    if not client or not _user_can_access_client(
+        store,
+        user,
+        client,
+        demo_required=bool(data.get("demo_required")),
+    ):
         return None
     return user
 
@@ -1262,7 +1534,15 @@ def _error_status_label(status_code: int, safe_status_code: int) -> str:
 
 
 def _registration_enabled(app: Flask) -> bool:
-    return bool(app.config["PASSKEY_REGISTRATION_ENABLED"])
+    store: PasskeyStore = app.extensions["passkey_store"]
+    settings = store.get_registration_settings(
+        default_enabled=bool(app.config["PASSKEY_REGISTRATION_ENABLED"])
+    )
+    if settings.mode == "open":
+        return True
+    if settings.mode == "temporary":
+        return bool(settings.enabled_until and settings.enabled_until >= int(time.time()))
+    return False
 
 
 def _registration_unlocked() -> bool:
@@ -1281,8 +1561,27 @@ def _clear_registration_unlock() -> None:
 
 def _clear_registration_state() -> None:
     session.pop("registration_challenge", None)
-    session.pop("registration_user_id", None)
+    session.pop("registration_username", None)
+    session.pop("registration_user_handle", None)
+    session.pop("registration_reservation_token", None)
     _clear_registration_unlock()
+
+
+def _admin_recovery_session_digest(token: str) -> str:
+    return hashlib.sha256(
+        f"session-admin-recovery:{token}".encode()
+    ).hexdigest()
+
+
+def _clear_admin_recovery_state() -> None:
+    for key in (
+        "admin_recovery_challenge",
+        "admin_recovery_username",
+        "admin_recovery_user_handle",
+        "admin_recovery_reservation_token",
+        "admin_recovery_token_hash",
+    ):
+        session.pop(key, None)
 
 
 def _error(message: str, status: int):
@@ -1298,10 +1597,63 @@ def _no_store(response):
 app = create_app()
 
 
-if __name__ == "__main__":
+_ADMIN_RECOVERY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
+def _validate_admin_recovery_token(flask_app: Flask, token: str) -> str | None:
+    if not _ADMIN_RECOVERY_TOKEN_RE.fullmatch(token):
+        return "token must use 8-128 URL-safe characters: A-Z, a-z, 0-9, _ or -"
+    token_key = token.casefold()
+    reserved = {"api", "demo", "oauth", "static", "management", "_error"}
+    for rule in flask_app.url_map.iter_rules():
+        first = rule.rule.lstrip("/").split("/", 1)[0]
+        if first and "<" not in first:
+            reserved.add(first.casefold())
+    if token_key in reserved:
+        return f'token conflicts with reserved route "{token}"'
+    return None
+
+
+def _print_startup_error(reason: str, token: str) -> None:
+    masked = f"{token[:2]}…{token[-2:]}" if len(token) >= 4 else "****"
+    print(
+        "\n".join(
+            (
+                "=" * 68,
+                " PASSKEY-AUTH STARTUP ERROR: INVALID ADMIN RECOVERY TOKEN",
+                "=" * 68,
+                f"Reason: {reason}",
+                f"Token: {masked}",
+                "Expected: 8-128 characters using A-Z, a-z, 0-9, _ or -",
+                "Server was not started.",
+                "=" * 68,
+            )
+        ),
+        file=sys.stderr,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m passkey_demo.app")
+    parser.add_argument("--reregister-admin", metavar="TOKEN")
+    args = parser.parse_args(argv)
     server_config = ServerConfig.from_env()
+    if args.reregister_admin:
+        reason = _validate_admin_recovery_token(app, args.reregister_admin)
+        store: PasskeyStore = app.extensions["passkey_store"]
+        if reason is None and not store.add_admin_recovery_token(args.reregister_admin):
+            reason = "token matches an existing or previously used recovery entry"
+        if reason:
+            _print_startup_error(reason, args.reregister_admin)
+            return 2
     app.run(
         host=server_config.host,
         port=server_config.port,
         debug=server_config.debug,
+        use_reloader=server_config.debug and not bool(args.reregister_admin),
     )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

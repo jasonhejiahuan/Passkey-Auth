@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="management-csrf-token" content="{{ csrf_token }}">
+    <title>Passkey Management</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='management.css') }}">
+    <script defer src="{{ url_for('static', filename='management.js') }}"></script>
+  </head>
+  <body>
+    <div class="management-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <picture>
+            <source
+              srcset="{{ url_for('static', filename='brand/jason-logo-white.png') }}"
+              media="(prefers-color-scheme: dark)"
+            >
+            <img
+              src="{{ url_for('static', filename='brand/jason-logo-black.png') }}"
+              alt="Jason"
+            >
+          </picture>
+          <span>Passkey Management</span>
+        </div>
+        <nav aria-label="管理区域">
+          <button class="nav-item is-active" data-view="users">用户</button>
+          <button class="nav-item" data-view="platforms">平台</button>
+          <button class="nav-item" data-view="login-history">登录历史</button>
+          <button class="nav-item" data-view="audit-logs">审计日志</button>
+          <button class="nav-item" data-view="settings">设置</button>
+        </nav>
+        <button id="refresh-button" class="quiet-button">刷新数据</button>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Passkey-Auth</p>
+            <h1 id="view-title">用户</h1>
+          </div>
+          <output id="management-status" role="status" aria-live="polite" hidden></output>
+        </header>
+
+        <section id="users-view" class="view is-active">
+          <div class="toolbar">
+            <input id="user-search" type="search" placeholder="搜索用户名或 sub">
+            <a class="button-link" href="/api/management/export/users.csv">导出 CSV</a>
+          </div>
+          <div id="users-list" class="data-list"></div>
+        </section>
+
+        <section id="platforms-view" class="view">
+          <div class="toolbar">
+            <button id="new-platform-button" class="primary-button">新建平台</button>
+            <a class="button-link" href="/api/management/export/platforms.csv">导出 CSV</a>
+          </div>
+          <div id="platforms-list" class="data-list"></div>
+        </section>
+
+        <section id="login-history-view" class="view">
+          <div class="toolbar">
+            <a class="button-link" href="/api/management/export/login-history.csv">导出 CSV</a>
+            <button class="danger-button" data-clear-log="login">清理登录历史</button>
+          </div>
+          <div id="login-history-list" class="data-list"></div>
+        </section>
+
+        <section id="audit-logs-view" class="view">
+          <div class="toolbar">
+            <a class="button-link" href="/api/management/export/audit-logs.csv">导出 CSV</a>
+            <button class="danger-button" data-clear-log="audit">清理审计日志</button>
+          </div>
+          <div id="audit-logs-list" class="data-list"></div>
+        </section>
+
+        <section id="settings-view" class="view">
+          <form id="registration-settings" class="settings-card">
+            <div>
+              <p class="eyebrow">注册</p>
+              <h2>注册入口</h2>
+            </div>
+            <label>
+              状态
+              <select name="mode">
+                <option value="closed">关闭</option>
+                <option value="open">永久开放</option>
+                <option value="temporary">临时开放</option>
+              </select>
+            </label>
+            <label>
+              临时开放至
+              <input name="enabledUntil" type="datetime-local">
+            </label>
+            <label class="switch-row">
+              <input name="defaultDemoAllowed" type="checkbox">
+              <span>新用户默认允许使用 Demo</span>
+            </label>
+            <button class="primary-button" type="submit">保存设置</button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="editor-dialog">
+      <form id="editor-form" method="dialog">
+        <header>
+          <h2 id="editor-title">编辑</h2>
+          <button class="icon-button" value="cancel" aria-label="关闭">关闭</button>
+        </header>
+        <div id="editor-content"></div>
+      </form>
+    </dialog>
+  </body>
+</html>

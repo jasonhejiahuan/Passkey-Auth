@@ -51,15 +51,6 @@ class AppConfig:
     # 额外允许的 OAuth callback 列表；使用逗号或换行分隔。
     passkey_oauth_redirect_uris: str = ""
 
-    # Legacy alias: use PASSKEY_OAUTH_CLIENT_ID for new deployments.
-    passkey_oauth_demo_client_id: str = "passkey-demo-client"
-
-    # Legacy alias: use PASSKEY_OAUTH_CLIENT_SECRET for new deployments.
-    passkey_oauth_demo_client_secret: str = "passkey-demo-secret"
-
-    # Legacy alias: use PASSKEY_OAUTH_REDIRECT_URIS for new deployments.
-    passkey_oauth_demo_redirect_uri: str = ""
-
     # OAuth authorization code 有效期，单位秒。
     passkey_oauth_code_ttl_seconds: int = 300
 
@@ -69,7 +60,7 @@ class AppConfig:
     # 链接跳转 challenge 有效期，单位秒。
     passkey_oauth_challenge_ttl_seconds: int = 300
 
-    # SQLite 数据库路径；空值表示使用 Flask instance/passkeys.sqlite3。
+    # SQLite 数据库路径；空值表示使用 Flask instance/passkeys-v2.sqlite3。
     passkey_database: str = ""
 
     # 是否信任反向代理注入的 X-Forwarded-* 头，用于 HTTPS/HTTP2/HTTP3 终止场景。
@@ -116,27 +107,9 @@ class AppConfig:
 
     @classmethod
     def from_env(cls, *, instance_path: str | Path) -> AppConfig:
-        defaults = cls(passkey_database=str(Path(instance_path) / "passkeys.sqlite3"))
+        defaults = cls(passkey_database=str(Path(instance_path) / "passkeys-v2.sqlite3"))
         passkey_origin = _env_optional_str("PASSKEY_ORIGIN")
         secure_cookies_default = _origin_is_https(passkey_origin)
-        oauth_client_id = _env_str(
-            "PASSKEY_OAUTH_CLIENT_ID",
-            _env_str("PASSKEY_OAUTH_DEMO_CLIENT_ID", defaults.passkey_oauth_client_id),
-        )
-        oauth_client_secret = _env_str(
-            "PASSKEY_OAUTH_CLIENT_SECRET",
-            _env_str(
-                "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
-                defaults.passkey_oauth_client_secret,
-            ),
-        )
-        oauth_redirect_uris = _env_str(
-            "PASSKEY_OAUTH_REDIRECT_URIS",
-            _env_str(
-                "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
-                defaults.passkey_oauth_redirect_uris,
-            ),
-        )
         return cls(
             flask_secret_key=_env_str(
                 "FLASK_SECRET_KEY",
@@ -157,16 +130,22 @@ class AppConfig:
                 "PASSKEY_SERVER_API_TOKEN",
                 defaults.passkey_server_api_token,
             ),
-            passkey_oauth_client_id=oauth_client_id,
-            passkey_oauth_client_secret=oauth_client_secret,
+            passkey_oauth_client_id=_env_str(
+                "PASSKEY_OAUTH_CLIENT_ID",
+                defaults.passkey_oauth_client_id,
+            ),
+            passkey_oauth_client_secret=_env_str(
+                "PASSKEY_OAUTH_CLIENT_SECRET",
+                defaults.passkey_oauth_client_secret,
+            ),
             passkey_oauth_client_name=_env_str(
                 "PASSKEY_OAUTH_CLIENT_NAME",
                 defaults.passkey_oauth_client_name,
             ),
-            passkey_oauth_redirect_uris=oauth_redirect_uris,
-            passkey_oauth_demo_client_id=oauth_client_id,
-            passkey_oauth_demo_client_secret=oauth_client_secret,
-            passkey_oauth_demo_redirect_uri=oauth_redirect_uris,
+            passkey_oauth_redirect_uris=_env_str(
+                "PASSKEY_OAUTH_REDIRECT_URIS",
+                defaults.passkey_oauth_redirect_uris,
+            ),
             passkey_oauth_code_ttl_seconds=_env_int(
                 "PASSKEY_OAUTH_CODE_TTL_SECONDS",
                 defaults.passkey_oauth_code_ttl_seconds,
@@ -250,9 +229,6 @@ class AppConfig:
             "PASSKEY_OAUTH_CLIENT_SECRET": self.passkey_oauth_client_secret,
             "PASSKEY_OAUTH_CLIENT_NAME": self.passkey_oauth_client_name,
             "PASSKEY_OAUTH_REDIRECT_URIS": self.passkey_oauth_redirect_uris,
-            "PASSKEY_OAUTH_DEMO_CLIENT_ID": self.passkey_oauth_demo_client_id,
-            "PASSKEY_OAUTH_DEMO_CLIENT_SECRET": self.passkey_oauth_demo_client_secret,
-            "PASSKEY_OAUTH_DEMO_REDIRECT_URI": self.passkey_oauth_demo_redirect_uri,
             "PASSKEY_OAUTH_CODE_TTL_SECONDS": self.passkey_oauth_code_ttl_seconds,
             "PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS": (
                 self.passkey_oauth_access_token_ttl_seconds

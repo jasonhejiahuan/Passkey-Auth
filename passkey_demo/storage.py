@@ -5,6 +5,7 @@ import sqlite3
 import time
 import hashlib
 import hmac
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -1584,7 +1585,7 @@ def _derive_oauth_code_digest(code: str) -> str:
 
 
 def _derive_secret_hash(secret: str) -> str:
-    salt = hashlib.sha256(f"{time.time_ns()}:{secret}".encode()).digest()[:16]
+    salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
         secret.encode(),

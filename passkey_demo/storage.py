@@ -87,6 +87,17 @@ class RegistrationSettings:
     default_demo_allowed: bool
 
 
+@dataclass(frozen=True)
+class PasskeySettings:
+    algorithms: list[int]
+    authenticator_attachment: str
+    resident_key: str
+    user_verification: str
+    attestation: str
+    exclude_credentials: bool
+    hints: list[str]
+
+
 class PasskeyStore:
     def __init__(self, database_path: str | Path):
         self.database_path = Path(database_path)
@@ -983,6 +994,91 @@ class PasskeyStore:
             "registration_mode": mode,
             "registration_enabled_until": str(enabled_until or ""),
             "default_demo_allowed": "true" if default_demo_allowed else "false",
+        }
+        with self.connect() as conn:
+            for key, value in values.items():
+                conn.execute(
+                    """
+                    INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(setting_key)
+                    DO UPDATE SET setting_value = excluded.setting_value,
+                                  updated_at = excluded.updated_at
+                    """,
+                    (key, value, now),
+                )
+
+    def get_passkey_settings(self) -> PasskeySettings:
+        defaults = {
+            "passkey_algorithms": "[-7, -8, -257]",
+            "passkey_authenticator_attachment": "any",
+            "passkey_resident_key": "required",
+            "passkey_user_verification": "preferred",
+            "passkey_attestation": "none",
+            "passkey_exclude_credentials": "true",
+            "passkey_hints": '["client-device", "security-key", "hybrid"]',
+        }
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT setting_key, setting_value FROM app_settings
+                WHERE setting_key LIKE 'passkey_%'
+                """
+            ).fetchall()
+        values = defaults | {
+            str(row["setting_key"]): str(row["setting_value"]) for row in rows
+        }
+        return PasskeySettings(
+            algorithms=[int(value) for value in json.loads(values["passkey_algorithms"])],
+            authenticator_attachment=values["passkey_authenticator_attachment"],
+            resident_key=values["passkey_resident_key"],
+            user_verification=values["passkey_user_verification"],
+            attestation=values["passkey_attestation"],
+            exclude_credentials=values["passkey_exclude_credentials"] == "true",
+            hints=[str(value) for value in json.loads(values["passkey_hints"])],
+        )
+
+    def set_passkey_settings(
+        self,
+        *,
+        algorithms: list[int],
+        authenticator_attachment: str,
+        resident_key: str,
+        user_verification: str,
+        attestation: str,
+        exclude_credentials: bool,
+        hints: list[str],
+    ) -> None:
+        allowed_algorithms = {-7, -8, -36, -37, -38, -39, -257, -258, -259}
+        allowed_attachments = {"any", "platform", "cross-platform"}
+        allowed_resident_keys = {"discouraged", "preferred", "required"}
+        allowed_user_verification = {"discouraged", "preferred", "required"}
+        allowed_attestation = {"none", "indirect", "direct", "enterprise"}
+        allowed_hints = {"client-device", "security-key", "hybrid"}
+        algorithms = list(dict.fromkeys(int(value) for value in algorithms))
+        hints = list(dict.fromkeys(str(value) for value in hints))
+        if not algorithms or any(value not in allowed_algorithms for value in algorithms):
+            raise ValueError("至少选择一种受支持的公钥签名算法")
+        if authenticator_attachment not in allowed_attachments:
+            raise ValueError("无效的认证器类型")
+        if resident_key not in allowed_resident_keys:
+            raise ValueError("无效的 Resident Key 设置")
+        if user_verification not in allowed_user_verification:
+            raise ValueError("无效的用户验证设置")
+        if attestation not in allowed_attestation:
+            raise ValueError("无效的 Attestation 设置")
+        if any(value not in allowed_hints for value in hints):
+            raise ValueError("无效的认证器提示")
+
+        now = int(time.time())
+        values = {
+            "passkey_algorithms": json.dumps(algorithms),
+            "passkey_authenticator_attachment": authenticator_attachment,
+            "passkey_resident_key": resident_key,
+            "passkey_user_verification": user_verification,
+            "passkey_attestation": attestation,
+            "passkey_exclude_credentials": "true" if exclude_credentials else "false",
+            "passkey_hints": json.dumps(hints),
         }
         with self.connect() as conn:
             for key, value in values.items():

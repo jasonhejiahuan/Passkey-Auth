@@ -11,14 +11,22 @@ let logoSecondaryClickTimer = 0;
 let registerModule = null;
 let registerPanelClosing = false;
 let statusHideTimer = 0;
+let authenticatedUser = null;
+let sessionReady = false;
+let sessionActionInProgress = false;
 
 logoButton.addEventListener("click", handleLogoClick);
 logoButton.addEventListener("pointerdown", handleLogoPointerDown);
 logoButton.addEventListener("contextmenu", blockLogoContextMenu);
 document.addEventListener("pointerdown", handleOutsidePointerDown);
 document.addEventListener("keydown", handleShortcut);
+document.addEventListener("passkey-session-changed", handleSessionChanged);
 
 refreshSession();
+
+function handleSessionChanged() {
+  refreshSession({ refreshNonHome: true });
+}
 
 function handleLogoClick() {
   logoPrimaryClickCount += 1;
@@ -26,7 +34,7 @@ function handleLogoClick() {
 
   if (logoPrimaryClickCount >= 5) {
     logoPrimaryClickCount = 0;
-    loginWithoutUsername();
+    handlePrimaryLogoAction();
     return;
   }
 
@@ -45,7 +53,7 @@ function handleLogoPointerDown(event) {
 
   if (logoSecondaryClickCount >= 5) {
     logoSecondaryClickCount = 0;
-    unlockRegisterPanel();
+    handleSecondaryLogoAction();
     return;
   }
 
@@ -58,24 +66,62 @@ function blockLogoContextMenu(event) {
   event.preventDefault();
 }
 
-function handleShortcut(event) {
+async function handlePrimaryLogoAction() {
+  await ensureSessionReady();
+  if (authenticatedUser) {
+    await logout();
+    return;
+  }
+  await loginWithoutUsername();
+}
+
+async function handleSecondaryLogoAction() {
+  await ensureSessionReady();
+  if (authenticatedUser) {
+    await logout();
+    return;
+  }
+  await unlockRegisterPanel();
+}
+
+async function handleShortcut(event) {
   const key = event.key.toLowerCase();
   const command = event.metaKey || event.ctrlKey;
+  const isAuthShortcut = (
+    (command && key === "k") ||
+    (event.altKey && key === "r")
+  );
+
+  if (isAuthShortcut) {
+    await ensureSessionReady();
+  }
 
   if (command && event.shiftKey && key === "k") {
     event.preventDefault();
+    if (authenticatedUser) {
+      showAuthenticatedStatus();
+      return;
+    }
     toggleRegisterPanel();
     return;
   }
 
   if (event.altKey && key === "r") {
     event.preventDefault();
+    if (authenticatedUser) {
+      showAuthenticatedStatus();
+      return;
+    }
     toggleRegisterPanel();
     return;
   }
 
   if (command && key === "k") {
     event.preventDefault();
+    if (authenticatedUser) {
+      showAuthenticatedStatus();
+      return;
+    }
     loginWithoutUsername();
     return;
   }
@@ -105,6 +151,11 @@ function handleOutsidePointerDown(event) {
 }
 
 async function unlockRegisterPanel() {
+  await ensureSessionReady();
+  if (authenticatedUser) {
+    showAuthenticatedStatus();
+    return;
+  }
   await runPasskeyAction(
     async () => {
       const { register } = await postJson(apiPath("ui", "intent"), {
@@ -121,6 +172,10 @@ async function unlockRegisterPanel() {
 }
 
 function toggleRegisterPanel() {
+  if (authenticatedUser) {
+    showAuthenticatedStatus();
+    return;
+  }
   if (registerModule?.isVisible()) {
     hideRegisterPanelWithTransition();
   } else {
@@ -192,6 +247,11 @@ function canUseViewTransition() {
 }
 
 async function loginWithPasskey(options = {}) {
+  await ensureSessionReady();
+  if (authenticatedUser) {
+    showAuthenticatedStatus();
+    return;
+  }
   await runPasskeyAction(async () => {
     const username = options.username ?? "";
     const { publicKey } = await postJson(apiPath("login", "options"), { username });
@@ -201,7 +261,7 @@ async function loginWithPasskey(options = {}) {
 
     const payload = { credential: encodeAuthenticationCredential(assertion) };
     await postJson(apiPath("login", "verify"), payload);
-    setStatus("登录成功", "success");
+    await refreshSession({ refreshNonHome: true });
   });
 }
 
@@ -209,13 +269,80 @@ async function loginWithoutUsername() {
   await loginWithPasskey({ username: "" });
 }
 
-async function refreshSession() {
-  const response = await fetch(apiPath("me"));
-  const data = await response.json();
-  if (data.authenticated) {
-    setStatus("当前已登录", "success");
-  } else {
-    statusOutput.hidden = true;
+async function refreshSession(options = {}) {
+  try {
+    const response = await fetch(apiPath("me"));
+    const data = await readJsonResponse(response);
+    if (!response.ok) {
+      throw new Error(data.error || "无法检查登录状态");
+    }
+    authenticatedUser = data.authenticated ? data.user : null;
+    if (authenticatedUser) {
+      if (options.refreshNonHome && !isHomePage()) {
+        window.location.reload();
+        return;
+      }
+      if (registerModule?.isVisible()) {
+        await hideRegisterPanelWithTransition();
+      }
+      if (isHomePage() && statusOutput.dataset.persistent !== "true") {
+        showAuthenticatedStatus();
+      }
+    } else if (statusOutput.dataset.persistent !== "true") {
+      window.clearTimeout(statusHideTimer);
+      statusOutput.hidden = true;
+      statusOutput.textContent = "";
+      statusOutput.dataset.kind = "";
+    }
+  } catch (error) {
+    authenticatedUser = null;
+    setStatus(error.message || String(error), "error");
+  } finally {
+    sessionReady = true;
+  }
+}
+
+async function ensureSessionReady() {
+  if (!sessionReady) {
+    await refreshSession();
+  }
+}
+
+function isHomePage() {
+  return window.location.pathname === "/";
+}
+
+function showAuthenticatedStatus() {
+  if (
+    !authenticatedUser ||
+    !isHomePage() ||
+    statusOutput.dataset.persistent === "true"
+  ) {
+    return;
+  }
+  setStatus(`当前已登录 · ${authenticatedUser.username}`, "success", {
+    autoHide: false,
+  });
+}
+
+async function logout() {
+  if (!authenticatedUser || sessionActionInProgress) {
+    return;
+  }
+
+  sessionActionInProgress = true;
+  try {
+    if (registerModule?.isVisible()) {
+      await hideRegisterPanelWithTransition();
+    }
+    await postJson(apiPath("logout"), {});
+    authenticatedUser = null;
+    setStatus("已退出登录", "success");
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+    window.setTimeout(showAuthenticatedStatus, STATUS_AUTO_HIDE_MS);
+  } finally {
+    sessionActionInProgress = false;
   }
 }
 
@@ -347,6 +474,7 @@ function passkeyUnavailableMessage() {
 
 function setStatus(message, kind, options = {}) {
   window.clearTimeout(statusHideTimer);
+  delete statusOutput.dataset.persistent;
   statusOutput.hidden = false;
   statusOutput.textContent = message;
   statusOutput.dataset.kind = kind;

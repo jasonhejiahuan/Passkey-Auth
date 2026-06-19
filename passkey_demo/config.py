@@ -36,6 +36,9 @@ class AppConfig:
     # 是否默认开放注册；默认关闭，避免被批量注册。
     passkey_registration_enabled: bool = False
 
+    # 是否在主页启用 Passkey 注册/登录交互；关闭时仅展示品牌页面。
+    passkey_home_auth_enabled: bool = True
+
     # 服务端 session 验证 API 的 Bearer token；空值表示不可用。
     passkey_server_api_token: str = ""
 
@@ -125,6 +128,10 @@ class AppConfig:
             passkey_registration_enabled=_env_bool(
                 "PASSKEY_REGISTRATION_ENABLED",
                 default=defaults.passkey_registration_enabled,
+            ),
+            passkey_home_auth_enabled=_env_bool(
+                "PASSKEY_HOME_AUTH_ENABLED",
+                default=defaults.passkey_home_auth_enabled,
             ),
             passkey_server_api_token=_env_str(
                 "PASSKEY_SERVER_API_TOKEN",
@@ -224,6 +231,7 @@ class AppConfig:
             "PASSKEY_ORIGIN": self.passkey_origin,
             "REGISTER_UNLOCK_TTL_SECONDS": self.register_unlock_ttl_seconds,
             "PASSKEY_REGISTRATION_ENABLED": self.passkey_registration_enabled,
+            "PASSKEY_HOME_AUTH_ENABLED": self.passkey_home_auth_enabled,
             "PASSKEY_SERVER_API_TOKEN": self.passkey_server_api_token,
             "PASSKEY_OAUTH_CLIENT_ID": self.passkey_oauth_client_id,
             "PASSKEY_OAUTH_CLIENT_SECRET": self.passkey_oauth_client_secret,

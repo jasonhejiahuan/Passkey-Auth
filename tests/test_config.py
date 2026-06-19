@@ -16,6 +16,7 @@ class ConfigTest(unittest.TestCase):
             "PASSKEY_ORIGIN",
             "REGISTER_UNLOCK_TTL_SECONDS",
             "PASSKEY_REGISTRATION_ENABLED",
+            "PASSKEY_HOME_AUTH_ENABLED",
             "PASSKEY_SERVER_API_TOKEN",
             "PASSKEY_OAUTH_CLIENT_ID",
             "PASSKEY_OAUTH_CLIENT_SECRET",
@@ -64,6 +65,7 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(config.passkey_origin)
         self.assertEqual(config.register_unlock_ttl_seconds, 120)
         self.assertFalse(config.passkey_registration_enabled)
+        self.assertTrue(config.passkey_home_auth_enabled)
         self.assertEqual(config.passkey_oauth_client_id, "passkey-demo-client")
         self.assertEqual(config.passkey_oauth_client_secret, "passkey-demo-secret")
         self.assertEqual(config.passkey_oauth_client_name, "Passkey OAuth Client")
@@ -93,6 +95,7 @@ class ConfigTest(unittest.TestCase):
         os.environ["PASSKEY_RP_ID"] = "xxxxx"
         os.environ["PASSKEY_ORIGIN"] = "https://auth.xxxxx"
         os.environ["PASSKEY_REGISTRATION_ENABLED"] = "true"
+        os.environ["PASSKEY_HOME_AUTH_ENABLED"] = "true"
         os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
         os.environ["PASSKEY_OAUTH_CLIENT_SECRET"] = "production-secret"
         os.environ["PASSKEY_OAUTH_CLIENT_NAME"] = "Production Client"
@@ -118,6 +121,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.passkey_rp_id, "xxxxx")
         self.assertEqual(config.passkey_origin, "https://auth.xxxxx")
         self.assertTrue(config.passkey_registration_enabled)
+        self.assertTrue(config.passkey_home_auth_enabled)
         self.assertEqual(config.passkey_oauth_client_id, "production-client")
         self.assertEqual(config.passkey_oauth_client_secret, "production-secret")
         self.assertEqual(config.passkey_oauth_client_name, "Production Client")
@@ -156,6 +160,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(mapping["SESSION_COOKIE_SAMESITE"], "Lax")
         self.assertFalse(mapping["SESSION_COOKIE_SECURE"])
         self.assertTrue(mapping["PASSKEY_SERVER_TIMING_ENABLED"])
+        self.assertTrue(mapping["PASSKEY_HOME_AUTH_ENABLED"])
         self.assertIn("PASSKEY_TELEMETRY_TOKEN_URL", mapping)
 
     def test_secure_cookie_env_can_override_https_origin_default(self) -> None:

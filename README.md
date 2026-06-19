@@ -111,6 +111,7 @@ PASSKEY_RP_NAME="Passkey Demo"
 PASSKEY_DATABASE=/path/to/passkeys-v2.sqlite3
 FLASK_SECRET_KEY=change-me
 PASSKEY_REGISTRATION_ENABLED=false
+PASSKEY_HOME_AUTH_ENABLED=true
 PASSKEY_SERVER_API_TOKEN=change-this-server-token
 PASSKEY_OAUTH_CLIENT_ID=passkey-demo-client
 PASSKEY_OAUTH_CLIENT_SECRET=passkey-demo-secret
@@ -124,6 +125,9 @@ PASSKEY_SERVER_TIMING_ENABLED=true
 
 `PASSKEY_REGISTRATION_ENABLED` 默认关闭，仅作为新数据库尚未保存管理设置时的初始值。
 之后可在 `/management` 中永久开启、关闭或按自定义到期时间临时开启。
+
+`PASSKEY_HOME_AUTH_ENABLED` 默认开启，主页会加载 `main.js`，启用 Logo
+隐藏注册/登录交互和对应快捷键。设为 `false` 后，主页仅展示品牌页面。
 
 HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，Flask 开发服务器本身不提供 HTTP/3。线上部署时设置 `PASSKEY_ORIGIN=https://auth.xxxxx`；如果代理会传递可信 `X-Forwarded-*` 头，再开启 `PASSKEY_TRUST_PROXY_HEADERS=true`。确认代理已经支持 HTTP/3 后，可设置 `PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'` 让 HTTPS 响应宣告 HTTP/3 替代服务。
 

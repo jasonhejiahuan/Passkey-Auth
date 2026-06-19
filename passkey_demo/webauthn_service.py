@@ -13,8 +13,10 @@ from webauthn import (
     verify_registration_response,
 )
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from webauthn.helpers.structs import (
     AttestationConveyancePreference,
+    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     AuthenticatorTransport,
     PublicKeyCredentialDescriptor,
@@ -31,6 +33,13 @@ class WebAuthnConfig:
     rp_name: str = "Passkey Demo"
     timeout_ms: int = 60_000
     require_user_verification: bool = False
+    algorithms: tuple[int, ...] = (-7, -8, -257)
+    authenticator_attachment: str = "any"
+    resident_key: str = "required"
+    user_verification: str = "preferred"
+    attestation: str = "none"
+    exclude_credentials: bool = True
+    hints: tuple[str, ...] = ("client-device", "security-key", "hybrid")
 
 
 @dataclass(frozen=True)
@@ -85,21 +94,25 @@ def build_registration_options(
         user_display_name=username,
         user_id=user_handle,
         timeout=config.timeout_ms,
-        attestation=AttestationConveyancePreference.NONE,
+        attestation=AttestationConveyancePreference(config.attestation),
         authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.REQUIRED,
-            require_resident_key=True,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            authenticator_attachment=(
+                None
+                if config.authenticator_attachment == "any"
+                else AuthenticatorAttachment(config.authenticator_attachment)
+            ),
+            resident_key=ResidentKeyRequirement(config.resident_key),
+            require_resident_key=config.resident_key == "required",
+            user_verification=UserVerificationRequirement(config.user_verification),
         ),
         exclude_credentials=[
             _descriptor_from_credential(credential)
             for credential in existing_credentials
+        ] if config.exclude_credentials else [],
+        supported_pub_key_algs=[
+            COSEAlgorithmIdentifier(algorithm) for algorithm in config.algorithms
         ],
-        hints=[
-            PublicKeyCredentialHint.CLIENT_DEVICE,
-            PublicKeyCredentialHint.SECURITY_KEY,
-            PublicKeyCredentialHint.HYBRID,
-        ],
+        hints=[PublicKeyCredentialHint(hint) for hint in config.hints] or None,
     )
     return json.loads(options_to_json(options)), bytes_to_base64url(options.challenge)
 
@@ -146,7 +159,7 @@ def build_authentication_options(
         rp_id=config.rp_id,
         timeout=config.timeout_ms,
         allow_credentials=credentials,
-        user_verification=UserVerificationRequirement.PREFERRED,
+        user_verification=UserVerificationRequirement(config.user_verification),
     )
     public_key = json.loads(options_to_json(options))
     if allowed_credentials is None:

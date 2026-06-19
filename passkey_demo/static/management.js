@@ -5,19 +5,36 @@ const statusOutput = document.querySelector("#management-status");
 const dialog = document.querySelector("#editor-dialog");
 const editorTitle = document.querySelector("#editor-title");
 const editorContent = document.querySelector("#editor-content");
+const reauthDialog = document.querySelector("#reauth-dialog");
+const reauthStatus = document.querySelector("#reauth-status");
+const reauthConfirm = document.querySelector("#reauth-confirm");
+const reauthCancel = document.querySelector("#reauth-cancel");
 let state = null;
+let settingsSaveChain = Promise.resolve();
+let reauthPromise = null;
+let resolveReauth = null;
+let rejectReauth = null;
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
 });
+window.addEventListener("hashchange", showViewFromHash);
 document.querySelector("#refresh-button").addEventListener("click", loadOverview);
 document.querySelector("#user-search").addEventListener("input", renderUsers);
 document.querySelector("#new-platform-button").addEventListener("click", openNewPlatform);
-document.querySelector("#registration-settings").addEventListener("submit", saveRegistration);
+document.querySelector("#registration-settings").addEventListener("change", saveRegistration);
+document.querySelector("#passkey-settings").addEventListener("change", handlePasskeySettingChange);
 document.querySelectorAll("[data-clear-log]").forEach((button) => {
   button.addEventListener("click", () => clearLogs(button.dataset.clearLog));
 });
+reauthConfirm.addEventListener("click", verifyRecentPasskey);
+reauthCancel.addEventListener("click", cancelRecentPasskey);
+reauthDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelRecentPasskey();
+});
 
+showViewFromHash();
 loadOverview();
 
 async function loadOverview() {
@@ -36,9 +53,15 @@ function renderAll() {
   renderLoginHistory();
   renderAuditLogs();
   renderSettings();
+  renderPasskeySettings();
 }
 
-function showView(name) {
+function showView(name, options = {}) {
+  const target = [...document.querySelectorAll(".nav-item")]
+    .find((item) => item.dataset.view === name);
+  if (!target) {
+    name = "users";
+  }
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.view === name);
   });
@@ -47,6 +70,22 @@ function showView(name) {
   });
   const active = document.querySelector(`.nav-item[data-view="${name}"]`);
   document.querySelector("#view-title").textContent = active.textContent;
+  if (options.updateHash !== false) {
+    const nextHash = `#${name}`;
+    if (window.location.hash !== nextHash) {
+      window.history.pushState(null, "", nextHash);
+    }
+  }
+}
+
+function showViewFromHash() {
+  const requestedView = window.location.hash.slice(1) || "users";
+  const exists = [...document.querySelectorAll(".nav-item")]
+    .some((item) => item.dataset.view === requestedView);
+  showView(exists ? requestedView : "users", { updateHash: false });
+  if (!exists && window.location.hash) {
+    window.history.replaceState(null, "", "#users");
+  }
 }
 
 function renderUsers() {
@@ -131,6 +170,59 @@ function renderSettings() {
   form.elements.enabledUntil.value = state.registration.enabledUntil
     ? localDateTime(state.registration.enabledUntil)
     : "";
+}
+
+const algorithmPresets = {
+  recommended: [-7, -8, -257],
+  modern: [-7, -8],
+  maximum: [-7, -8, -36, -37, -38, -39, -257, -258, -259],
+};
+
+function renderPasskeySettings() {
+  if (!state) return;
+  const form = document.querySelector("#passkey-settings");
+  const settings = state.passkeySettings;
+  form.elements.authenticatorAttachment.value = settings.authenticatorAttachment;
+  form.elements.residentKey.value = settings.residentKey;
+  form.elements.userVerification.value = settings.userVerification;
+  form.elements.attestation.value = settings.attestation;
+  form.elements.excludeCredentials.checked = settings.excludeCredentials;
+  form.querySelectorAll('[name="algorithm"]').forEach((input) => {
+    input.checked = settings.algorithms.includes(Number(input.value));
+  });
+  form.elements.hintPreset.value = hintPresetFor(settings.hints);
+  syncAlgorithmPreset();
+}
+
+function applyAlgorithmPreset(value) {
+  const algorithms = algorithmPresets[value];
+  if (!algorithms) return;
+  document.querySelectorAll('[name="algorithm"]').forEach((input) => {
+    input.checked = algorithms.includes(Number(input.value));
+  });
+}
+
+function syncAlgorithmPreset() {
+  const selected = selectedAlgorithms();
+  const preset = Object.entries(algorithmPresets).find(([, algorithms]) =>
+    sameValues(selected, algorithms),
+  );
+  document.querySelector('[name="algorithmPreset"]').value = preset?.[0] || "custom";
+}
+
+function selectedAlgorithms() {
+  return [...document.querySelectorAll('[name="algorithm"]:checked')]
+    .map((input) => Number(input.value));
+}
+
+function hintPresetFor(hints) {
+  if (sameValues(hints, ["client-device", "security-key", "hybrid"])) return "all";
+  if (hints.length === 1) return hints[0];
+  return "none";
+}
+
+function sameValues(left, right) {
+  return left.length === right.length && left.every((value) => right.includes(value));
 }
 
 function openUser(userId) {
@@ -296,17 +388,83 @@ function platformEditor(platform = null) {
   `;
 }
 
-async function saveRegistration(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
+function saveRegistration() {
+  const form = document.querySelector("#registration-settings");
   const dateValue = form.elements.enabledUntil.value;
-  await mutate("/api/management/settings/registration", {
+  if (form.elements.mode.value === "temporary" && !dateValue) {
+    setStatus("请选择临时开放的结束时间", "error");
+    form.elements.enabledUntil.focus();
+    return;
+  }
+  const enabledUntil = dateValue
+    ? Math.floor(new Date(dateValue).getTime() / 1000)
+    : null;
+  if (form.elements.mode.value === "temporary" && enabledUntil <= Math.floor(Date.now() / 1000)) {
+    setStatus("临时开放时间必须晚于当前时间", "error");
+    return;
+  }
+  queueSettingsSave("/api/management/settings/registration", {
     method: "PATCH",
     body: {
       mode: form.elements.mode.value,
-      enabledUntil: dateValue ? Math.floor(new Date(dateValue).getTime() / 1000) : null,
+      enabledUntil,
       defaultDemoAllowed: form.elements.defaultDemoAllowed.checked,
     },
+  });
+}
+
+function handlePasskeySettingChange(event) {
+  if (event.target.name === "algorithmPreset") {
+    if (event.target.value === "custom") return;
+    applyAlgorithmPreset(event.target.value);
+  }
+  if (event.target.name === "algorithm") {
+    syncAlgorithmPreset();
+  }
+  savePasskeySettings();
+}
+
+function savePasskeySettings() {
+  const form = document.querySelector("#passkey-settings");
+  const algorithms = selectedAlgorithms();
+  if (!algorithms.length) {
+    setStatus("请至少启用一种公钥签名算法", "error");
+    renderPasskeySettings();
+    return;
+  }
+  const hintPreset = form.elements.hintPreset.value;
+  const hints = hintPreset === "all"
+    ? ["client-device", "security-key", "hybrid"]
+    : hintPreset === "none" ? [] : [hintPreset];
+  queueSettingsSave("/api/management/settings/passkey", {
+    method: "PATCH",
+    body: {
+      algorithms,
+      authenticatorAttachment: form.elements.authenticatorAttachment.value,
+      residentKey: form.elements.residentKey.value,
+      userVerification: form.elements.userVerification.value,
+      attestation: form.elements.attestation.value,
+      excludeCredentials: form.elements.excludeCredentials.checked,
+      hints,
+    },
+  });
+}
+
+function queueSettingsSave(url, options) {
+  settingsSaveChain = settingsSaveChain.then(async () => {
+    setStatus("正在自动保存…", "muted");
+    try {
+      await requestJson(url, options);
+      setStatus("已自动保存", "success", true);
+    } catch (error) {
+      setStatus(error.message, "error");
+      try {
+        state = await requestJson("/api/management/overview");
+        renderAll();
+      } catch (refreshError) {
+        setStatus(refreshError.message, "error");
+      }
+    }
   });
 }
 
@@ -351,8 +509,132 @@ async function requestJson(url, options = {}) {
   }
   const response = await fetch(url, init);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "请求失败");
+  if (response.status === 428 && !options.skipReauth) {
+    await requireRecentPasskey();
+    return requestJson(url, { ...options, skipReauth: true });
+  }
+  if (!response.ok) {
+    const error = new Error(data.error || "请求失败");
+    error.status = response.status;
+    throw error;
+  }
   return data;
+}
+
+function requireRecentPasskey() {
+  if (reauthPromise) return reauthPromise;
+  reauthStatus.hidden = true;
+  reauthStatus.textContent = "";
+  reauthConfirm.disabled = false;
+  reauthDialog.showModal();
+  reauthPromise = new Promise((resolve, reject) => {
+    resolveReauth = resolve;
+    rejectReauth = reject;
+  });
+  return reauthPromise;
+}
+
+async function verifyRecentPasskey() {
+  reauthConfirm.disabled = true;
+  setReauthStatus("等待浏览器 Passkey 操作…", "muted");
+  try {
+    if (!window.isSecureContext || !window.PublicKeyCredential) {
+      throw new Error("请使用 HTTPS 或 localhost，并确认浏览器支持 Passkey");
+    }
+    const { publicKey } = await requestJson("/api/management/reauth/options", {
+      method: "POST",
+      skipReauth: true,
+    });
+    const assertion = await navigator.credentials.get({
+      publicKey: decodeRequestOptions(publicKey),
+    });
+    await requestJson("/api/management/reauth/verify", {
+      method: "POST",
+      body: { credential: encodeAuthenticationCredential(assertion) },
+      skipReauth: true,
+    });
+    reauthDialog.close();
+    resolveReauth?.();
+    clearReauthPromise();
+    setStatus("身份验证完成，已继续操作", "success", true);
+  } catch (error) {
+    if (isPasskeyCancelError(error)) {
+      setReauthStatus("Passkey 验证已取消", "muted");
+    } else {
+      setReauthStatus(error.message || String(error), "error");
+    }
+    reauthConfirm.disabled = false;
+  }
+}
+
+function cancelRecentPasskey() {
+  reauthDialog.close();
+  rejectReauth?.(new Error("操作已取消，未进行任何更改"));
+  clearReauthPromise();
+}
+
+function clearReauthPromise() {
+  reauthPromise = null;
+  resolveReauth = null;
+  rejectReauth = null;
+}
+
+function setReauthStatus(message, kind) {
+  reauthStatus.hidden = false;
+  reauthStatus.textContent = message;
+  reauthStatus.dataset.kind = kind;
+}
+
+function decodeRequestOptions(options) {
+  return {
+    ...options,
+    challenge: base64urlToBuffer(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map((descriptor) => ({
+      ...descriptor,
+      id: base64urlToBuffer(descriptor.id),
+    })),
+  };
+}
+
+function encodeAuthenticationCredential(credential) {
+  const response = credential.response;
+  return {
+    id: credential.id,
+    rawId: bufferToBase64url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment || null,
+    response: {
+      clientDataJSON: bufferToBase64url(response.clientDataJSON),
+      authenticatorData: bufferToBase64url(response.authenticatorData),
+      signature: bufferToBase64url(response.signature),
+      userHandle: response.userHandle
+        ? bufferToBase64url(response.userHandle)
+        : null,
+    },
+    clientExtensionResults: credential.getClientExtensionResults(),
+  };
+}
+
+function base64urlToBuffer(value) {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+  const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  return bytes.buffer;
+}
+
+function bufferToBase64url(buffer) {
+  const binary = String.fromCharCode(...new Uint8Array(buffer));
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function isPasskeyCancelError(error) {
+  return (
+    error instanceof DOMException &&
+    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
+  );
 }
 
 function renderList(selector, items, renderer) {

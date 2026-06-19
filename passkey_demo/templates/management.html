@@ -30,6 +30,7 @@
           <button class="nav-item" data-view="login-history">登录历史</button>
           <button class="nav-item" data-view="audit-logs">审计日志</button>
           <button class="nav-item" data-view="settings">设置</button>
+          <button class="nav-item" data-view="passkey-settings">Passkey 高级设置</button>
         </nav>
         <button id="refresh-button" class="quiet-button">刷新数据</button>
       </aside>
@@ -80,6 +81,7 @@
             <div>
               <p class="eyebrow">注册</p>
               <h2>注册入口</h2>
+              <p class="muted">更改后自动保存。</p>
             </div>
             <label>
               状态
@@ -97,7 +99,91 @@
               <input name="defaultDemoAllowed" type="checkbox">
               <span>新用户默认允许使用 Demo</span>
             </label>
-            <button class="primary-button" type="submit">保存设置</button>
+          </form>
+        </section>
+
+        <section id="passkey-settings-view" class="view">
+          <form id="passkey-settings" class="settings-card settings-card-wide">
+            <div>
+              <p class="eyebrow">WebAuthn</p>
+              <h2>Passkey 高级设置</h2>
+              <p class="muted">更改后自动保存，并影响之后创建和验证的 Passkey；不会改写已有凭据。</p>
+            </div>
+
+            <label>
+              公钥签名算法预设
+              <select name="algorithmPreset">
+                <option value="recommended">推荐兼容（ES256、EdDSA、RS256）</option>
+                <option value="modern">现代设备（ES256、EdDSA）</option>
+                <option value="maximum">最大兼容（全部安全算法）</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <fieldset>
+              <legend>启用的公钥签名算法</legend>
+              <div class="option-grid">
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-7"><span>ES256 · 推荐</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-8"><span>EdDSA</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-257"><span>RS256 · 兼容</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-36"><span>ES512</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-37"><span>PS256</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-38"><span>PS384</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-39"><span>PS512</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-258"><span>RS384</span></label>
+                <label class="switch-row"><input type="checkbox" name="algorithm" value="-259"><span>RS512</span></label>
+              </div>
+            </fieldset>
+
+            <div class="settings-grid">
+              <label>
+                认证器类型
+                <select name="authenticatorAttachment">
+                  <option value="any">不限（推荐）</option>
+                  <option value="platform">仅本机认证器</option>
+                  <option value="cross-platform">仅安全密钥</option>
+                </select>
+              </label>
+              <label>
+                Resident Key
+                <select name="residentKey">
+                  <option value="required">必须 · 支持无用户名登录</option>
+                  <option value="preferred">优先</option>
+                  <option value="discouraged">不建议使用</option>
+                </select>
+              </label>
+              <label>
+                用户验证
+                <select name="userVerification">
+                  <option value="preferred">优先（推荐）</option>
+                  <option value="required">必须验证指纹、面容或 PIN</option>
+                  <option value="discouraged">仅确认用户在场</option>
+                </select>
+              </label>
+              <label>
+                Attestation
+                <select name="attestation">
+                  <option value="none">不请求（推荐）</option>
+                  <option value="indirect">间接证明</option>
+                  <option value="direct">直接证明</option>
+                  <option value="enterprise">企业证明</option>
+                </select>
+              </label>
+              <label>
+                浏览器认证器提示
+                <select name="hintPreset">
+                  <option value="all">本机优先，允许安全密钥和跨设备</option>
+                  <option value="client-device">优先本机 Passkey</option>
+                  <option value="security-key">优先安全密钥</option>
+                  <option value="hybrid">优先手机跨设备认证</option>
+                  <option value="none">不提供提示</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="switch-row">
+              <input name="excludeCredentials" type="checkbox">
+              <span>注册时排除账户已有凭据，避免重复注册</span>
+            </label>
           </form>
         </section>
       </main>
@@ -111,6 +197,21 @@
         </header>
         <div id="editor-content"></div>
       </form>
+    </dialog>
+
+    <dialog id="reauth-dialog" class="compact-dialog">
+      <section class="reauth-panel">
+        <div>
+          <p class="eyebrow">安全确认</p>
+          <h2>确认是你本人</h2>
+          <p class="muted">当前登录保持不变。使用这个管理员账户的 Passkey 验证后，将自动继续刚才的操作。</p>
+        </div>
+        <output id="reauth-status" role="status" aria-live="polite" hidden></output>
+        <div class="editor-actions">
+          <button id="reauth-confirm" class="primary-button" type="button">使用 Passkey 验证</button>
+          <button id="reauth-cancel" type="button">取消</button>
+        </div>
+      </section>
     </dialog>
   </body>
 </html>

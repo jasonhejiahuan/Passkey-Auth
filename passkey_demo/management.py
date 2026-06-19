@@ -8,10 +8,17 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
-from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.exceptions import WebAuthnException
 
 from .storage import PasskeyStore, User
-from .webauthn_service import normalize_username
+from .webauthn_service import (
+    WebAuthnConfig,
+    build_authentication_options,
+    credential_for_options,
+    normalize_username,
+    verify_authentication,
+)
 
 
 def create_management_blueprint() -> Blueprint:
@@ -19,7 +26,7 @@ def create_management_blueprint() -> Blueprint:
 
     @blueprint.get("/management")
     def management_page():
-        user = _require_admin()
+        user = _require_admin(html=True)
         if not isinstance(user, User):
             return user
         csrf_token = session.get("management_csrf_token") or secrets.token_urlsafe(32)
@@ -70,6 +77,7 @@ def create_management_blueprint() -> Blueprint:
         settings = store.get_registration_settings(
             default_enabled=bool(current_app.config["PASSKEY_REGISTRATION_ENABLED"])
         )
+        passkey_settings = store.get_passkey_settings()
         return _no_store(
             jsonify(
                 {
@@ -84,9 +92,74 @@ def create_management_blueprint() -> Blueprint:
                         "enabledUntil": settings.enabled_until,
                         "defaultDemoAllowed": settings.default_demo_allowed,
                     },
+                    "passkeySettings": {
+                        "algorithms": passkey_settings.algorithms,
+                        "authenticatorAttachment": passkey_settings.authenticator_attachment,
+                        "residentKey": passkey_settings.resident_key,
+                        "userVerification": passkey_settings.user_verification,
+                        "attestation": passkey_settings.attestation,
+                        "excludeCredentials": passkey_settings.exclude_credentials,
+                        "hints": passkey_settings.hints,
+                    },
                 }
             )
         )
+
+    @blueprint.post("/api/management/reauth/options")
+    def reauth_options():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        csrf_error = _require_csrf()
+        if csrf_error:
+            return csrf_error
+        credentials = _store().list_credentials_for_user(actor.id)
+        if not credentials:
+            return _error("当前账户没有可用于验证的 Passkey", 409)
+        public_key, challenge = build_authentication_options(
+            allowed_credentials=[
+                credential_for_options(credential) for credential in credentials
+            ],
+            config=_management_webauthn_config(require_user_verification=True),
+        )
+        session["management_reauth_challenge"] = challenge
+        return _no_store(jsonify({"ok": True, "publicKey": public_key}))
+
+    @blueprint.post("/api/management/reauth/verify")
+    def reauth_verify():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        csrf_error = _require_csrf()
+        if csrf_error:
+            return csrf_error
+        challenge = session.get("management_reauth_challenge")
+        if not challenge:
+            return _error("验证会话已过期，请重新开始", 400)
+
+        credential_json = (request.get_json(force=True) or {}).get("credential", {})
+        credential_id = base64url_to_bytes(credential_json.get("rawId", ""))
+        credential = _store().get_credential_by_id(credential_id)
+        if not credential or credential.user_id != actor.id:
+            session.pop("management_reauth_challenge", None)
+            return _error("必须使用当前管理员账户的 Passkey", 403)
+        try:
+            result = verify_authentication(
+                credential=credential_json,
+                expected_challenge=str(challenge),
+                credential_public_key=credential.public_key,
+                credential_current_sign_count=credential.sign_count,
+                config=_management_webauthn_config(require_user_verification=True),
+            )
+        except WebAuthnException:
+            session.pop("management_reauth_challenge", None)
+            raise
+
+        _store().update_sign_count(result.credential_id, result.new_sign_count)
+        session.pop("management_reauth_challenge", None)
+        session["management_reauthenticated_at"] = int(time.time())
+        _audit(actor, "management.reauthenticate", "session", str(actor.id), {})
+        return _no_store(jsonify({"ok": True}))
 
     @blueprint.patch("/api/management/users/<int:user_id>")
     def update_user(user_id: int):
@@ -265,6 +338,41 @@ def create_management_blueprint() -> Blueprint:
         _audit(actor, "registration.update", "settings", "registration", {"mode": mode})
         return _no_store(jsonify({"ok": True}))
 
+    @blueprint.patch("/api/management/settings/passkey")
+    def update_passkey_settings():
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        data = request.get_json(force=True)
+        try:
+            _store().set_passkey_settings(
+                algorithms=data.get("algorithms") or [],
+                authenticator_attachment=str(
+                    data.get("authenticatorAttachment") or "any"
+                ),
+                resident_key=str(data.get("residentKey") or "required"),
+                user_verification=str(
+                    data.get("userVerification") or "preferred"
+                ),
+                attestation=str(data.get("attestation") or "none"),
+                exclude_credentials=bool(data.get("excludeCredentials", True)),
+                hints=data.get("hints") or [],
+            )
+        except (TypeError, ValueError) as error:
+            return _error(str(error), 400)
+        _audit(
+            actor,
+            "passkey_settings.update",
+            "settings",
+            "passkey",
+            {
+                "algorithms": data.get("algorithms") or [],
+                "residentKey": data.get("residentKey"),
+                "userVerification": data.get("userVerification"),
+            },
+        )
+        return _no_store(jsonify({"ok": True}))
+
     @blueprint.post("/api/management/logs/<log_type>/clear")
     def clear_logs(log_type: str):
         actor = _require_write()
@@ -335,11 +443,15 @@ def _current_user() -> User | None:
     return user
 
 
-def _require_admin():
+def _require_admin(*, html: bool = False):
     user = _current_user()
     if not user:
+        if html:
+            return _management_error_page("请先完成 Passkey 登录", 401)
         return _error("请先完成 Passkey 登录", 401)
     if not _store().get_permissions(user.id)["admin"]:
+        if html:
+            return _management_error_page("没有管理权限", 403)
         return _error("没有管理权限", 403)
     return user
 
@@ -356,6 +468,29 @@ def _require_write():
     if reauthenticated_at < int(time.time()) - 300:
         return _error("请重新完成 Passkey 登录后再执行此操作", 428)
     return user
+
+
+def _require_csrf():
+    expected = session.get("management_csrf_token")
+    provided = request.headers.get("X-CSRF-Token", "")
+    if not expected or not secrets.compare_digest(str(expected), provided):
+        return _error("CSRF 校验失败", 403)
+    return None
+
+
+def _management_webauthn_config(
+    *,
+    require_user_verification: bool,
+) -> WebAuthnConfig:
+    settings = _store().get_passkey_settings()
+    origin = current_app.config["PASSKEY_ORIGIN"] or request.host_url.rstrip("/")
+    return WebAuthnConfig(
+        rp_id=current_app.config["PASSKEY_RP_ID"],
+        rp_name=current_app.config["PASSKEY_RP_NAME"],
+        origin=origin,
+        require_user_verification=require_user_verification,
+        user_verification="required" if require_user_verification else settings.user_verification,
+    )
 
 
 def _audit(
@@ -492,6 +627,23 @@ def _iso(value) -> str:
 
 def _error(message: str, status: int):
     return _no_store((jsonify({"ok": False, "error": message}), status))
+
+
+def _management_error_page(message: str, status: int):
+    response = current_app.make_response(
+        (
+            render_template(
+                "error.html",
+                status_code=status,
+                status_label=f"{status} · {'Unauthorized' if status == 401 else 'Forbidden'}",
+                error_message=message,
+                home_auth_enabled=current_app.config["PASSKEY_HOME_AUTH_ENABLED"],
+            ),
+            status,
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _no_store(response):

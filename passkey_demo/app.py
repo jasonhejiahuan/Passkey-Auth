@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from flask import Flask, g, jsonify, redirect, render_template, request, session
+from flask import Flask, current_app, g, jsonify, redirect, render_template, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import WebAuthnException
@@ -81,14 +81,24 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template(
+            "index.html",
+            home_auth_enabled=app.config["PASSKEY_HOME_AUTH_ENABLED"],
+        )
 
     @app.get("/api/me")
     def me():
         user = _current_user(store, session)
         if not user:
             return jsonify({"authenticated": False})
-        return jsonify({"authenticated": True})
+        return jsonify(
+            {
+                "authenticated": True,
+                "user": {
+                    "username": user.username,
+                },
+            }
+        )
 
     @app.post("/api/telemetry/browser-token")
     def telemetry_browser_token():
@@ -921,10 +931,19 @@ def create_app() -> Flask:
 
 def _config(app: Flask) -> WebAuthnConfig:
     origin = app.config["PASSKEY_ORIGIN"] or request.host_url.rstrip("/")
+    settings = app.extensions["passkey_store"].get_passkey_settings()
     return WebAuthnConfig(
         rp_id=app.config["PASSKEY_RP_ID"],
         rp_name=app.config["PASSKEY_RP_NAME"],
         origin=origin,
+        require_user_verification=settings.user_verification == "required",
+        algorithms=tuple(settings.algorithms),
+        authenticator_attachment=settings.authenticator_attachment,
+        resident_key=settings.resident_key,
+        user_verification=settings.user_verification,
+        attestation=settings.attestation,
+        exclude_credentials=settings.exclude_credentials,
+        hints=tuple(settings.hints),
     )
 
 
@@ -1513,6 +1532,7 @@ def _render_error_page(status_code: int):
         "error.html",
         status_code=safe_status_code,
         status_label=_error_status_label(status_code, safe_status_code),
+        home_auth_enabled=current_app.config["PASSKEY_HOME_AUTH_ENABLED"],
     ), safe_status_code
 
 

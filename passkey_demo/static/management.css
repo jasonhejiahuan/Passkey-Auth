@@ -136,6 +136,7 @@ textarea { min-height: 100px; resize: vertical; }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 .settings-card {
   width: min(560px, 100%);
+  min-width: 0;
   display: grid;
   gap: 18px;
   padding: 24px;
@@ -143,6 +144,22 @@ textarea { min-height: 100px; resize: vertical; }
   border-radius: 14px;
   background: var(--surface);
 }
+.settings-card > *, .settings-grid > *, .option-grid > * { min-width: 0; }
+.settings-card-wide { width: min(820px, 100%); }
+.settings-grid, .option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+select { min-width: 0; max-width: 100%; }
+legend { padding: 0 7px; color: var(--muted); font-size: 14px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: 14px; }
 .switch-row { grid-template-columns: auto 1fr; align-items: center; }
 .switch-row input { width: 18px; min-height: 18px; }
@@ -174,6 +191,10 @@ dialog form > header {
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .permission-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .credential-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.compact-dialog { width: min(460px, calc(100% - 28px)); }
+.reauth-panel { display: grid; gap: 18px; padding: 24px; }
+#reauth-status { color: var(--muted); }
+#reauth-status[data-kind="error"] { color: var(--danger); }
 
 @media (max-width: 760px) {
   .management-shell { grid-template-columns: 1fr; }
@@ -185,12 +206,14 @@ dialog form > header {
     border-right: 0;
     border-bottom: 1px solid var(--line);
     gap: 12px;
+    min-width: 0;
+    overflow: hidden;
   }
   .brand span, .quiet-button { display: none; }
   .brand picture { width: 32px; }
   nav { display: flex; overflow-x: auto; }
   .nav-item { white-space: nowrap; }
-  .workspace { padding: 24px 16px 50px; }
+  .workspace { width: 100%; padding: 24px 16px 50px; }
   .workspace-header { display: grid; }
   .toolbar { flex-wrap: wrap; justify-content: flex-start; }
   .toolbar input { width: 100%; flex-basis: 100%; }
@@ -205,6 +228,7 @@ dialog form > header {
   .data-row .row-primary { grid-column: 1 / -1; }
   .data-row > button { grid-column: 1 / -1; }
   .permission-grid { grid-template-columns: 1fr; }
+  .settings-grid, .option-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-color-scheme: dark) {

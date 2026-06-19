@@ -1,2 +1,23 @@
 {% extends "brand_page.html" %}
+{% from "_brand.html" import brand_logo %}
 {% set page_title = "Jason Studio" %}
+
+{% block head_extra %}
+  {% if home_auth_enabled %}
+    <script defer src="{{ url_for('static', filename='main.js') }}"></script>
+  {% endif %}
+{% endblock %}
+
+{% block logo %}
+  {% if home_auth_enabled %}
+    {{ brand_logo(button_id="logo-button") }}
+  {% else %}
+    {{ brand_logo() }}
+  {% endif %}
+{% endblock %}
+
+{% block status %}
+  {% if home_auth_enabled %}
+    <output id="status" class="status" role="status" aria-live="polite" hidden></output>
+  {% endif %}
+{% endblock %}

@@ -16,6 +16,7 @@ Read the project Wiki before broad changes:
 - `passkey_demo/app.py`: Flask routes, OAuth flow, link challenge flow, session verify API.
 - `passkey_demo/config.py`: default config values and environment overrides.
 - `passkey_demo/storage.py`: SQLite users, credentials, OAuth codes, challenge requests.
+- `passkey_demo/management.py`: `/management` UI APIs, permissions, CSV export, and log cleanup.
 - `passkey_demo/webauthn_service.py`: WebAuthn option generation and verification.
 - `passkey_demo/static/`: browser passkey flows and UI behavior.
 - `passkey_demo/templates/`: minimal Auth WebUI and demo pages.
@@ -31,6 +32,9 @@ Keep these true:
 - Link challenges are single-use; `status=success` is display-only, never auth proof.
 - `client_secret`, server API tokens, session cookies, access tokens, and raw credentials must not be exposed in browser UI or committed.
 - Registration stays disabled by default.
+- The v2 database is intentionally fresh-start only; do not add legacy schema migrations or old `PASSKEY_OAUTH_DEMO_*` aliases.
+- Management writes require admin session, CSRF, and recent Passkey authentication.
+- Recovery tokens are one-use, hash-only, and must be validated before the server starts.
 - `PASSKEY_ORIGIN` must match the browser origin used for WebAuthn.
 
 ## Development Loop
@@ -48,6 +52,10 @@ PORT=5003 PASSKEY_ORIGIN=http://localhost:5003 .venv/bin/python -m passkey_demo.
 ```
 
 If you touch UI, check desktop and mobile layouts. If you touch auth, OAuth, storage, or config, add or update tests.
+
+The management UI extends the existing black/white design language with a responsive
+sidebar, dense desktop rows, mobile cards, light/dark mode, and explicit confirmation
+for destructive actions.
 
 ## Change Style
 

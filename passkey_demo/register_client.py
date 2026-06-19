@@ -78,7 +78,8 @@ async function registerPasskey() {
 
     const payload = { credential: encodeRegistrationCredential(credential) };
     await postJson("/api/register/verify", payload);
-    setStatus("已注册并登录", "success");
+    hideRegisterPanel();
+    document.dispatchEvent(new Event("passkey-session-changed"));
   });
 }
 

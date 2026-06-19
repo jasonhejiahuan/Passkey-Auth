@@ -22,16 +22,10 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
                 "PASSKEY_OAUTH_CLIENT_SECRET",
                 "PASSKEY_OAUTH_CLIENT_NAME",
                 "PASSKEY_OAUTH_REDIRECT_URIS",
-                "PASSKEY_OAUTH_DEMO_CLIENT_ID",
-                "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
-                "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
             )
         }
         os.environ["PASSKEY_DATABASE"] = self.database_path
         os.environ["FLASK_SECRET_KEY"] = "test-secret"
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = "passkey-demo-client"
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = "passkey-demo-secret"
-        os.environ.pop("PASSKEY_OAUTH_DEMO_REDIRECT_URI", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_ID", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_SECRET", None)
         os.environ.pop("PASSKEY_OAUTH_CLIENT_NAME", None)
@@ -104,6 +98,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
         )
         with self.client.session_transaction() as session:
             session["signed_in_user_id"] = user.id
+            session["signed_in_session_version"] = user.session_version
             session["link_login_state"] = "state-123"
 
         response = self.client.post(f"/oauth/challenge/{challenge_id}/complete")
@@ -146,6 +141,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
         )
         with self.client.session_transaction() as session:
             session["signed_in_user_id"] = user.id
+            session["signed_in_session_version"] = user.session_version
 
         response = self.client.post(f"/oauth/challenge/{challenge_id}/complete")
 

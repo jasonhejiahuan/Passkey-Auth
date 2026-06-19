@@ -16,14 +16,12 @@ class ConfigTest(unittest.TestCase):
             "PASSKEY_ORIGIN",
             "REGISTER_UNLOCK_TTL_SECONDS",
             "PASSKEY_REGISTRATION_ENABLED",
+            "PASSKEY_HOME_AUTH_ENABLED",
             "PASSKEY_SERVER_API_TOKEN",
             "PASSKEY_OAUTH_CLIENT_ID",
             "PASSKEY_OAUTH_CLIENT_SECRET",
             "PASSKEY_OAUTH_CLIENT_NAME",
             "PASSKEY_OAUTH_REDIRECT_URIS",
-            "PASSKEY_OAUTH_DEMO_CLIENT_ID",
-            "PASSKEY_OAUTH_DEMO_CLIENT_SECRET",
-            "PASSKEY_OAUTH_DEMO_REDIRECT_URI",
             "PASSKEY_OAUTH_CODE_TTL_SECONDS",
             "PASSKEY_OAUTH_ACCESS_TOKEN_TTL_SECONDS",
             "PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS",
@@ -67,15 +65,15 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNone(config.passkey_origin)
         self.assertEqual(config.register_unlock_ttl_seconds, 120)
         self.assertFalse(config.passkey_registration_enabled)
+        self.assertTrue(config.passkey_home_auth_enabled)
         self.assertEqual(config.passkey_oauth_client_id, "passkey-demo-client")
         self.assertEqual(config.passkey_oauth_client_secret, "passkey-demo-secret")
         self.assertEqual(config.passkey_oauth_client_name, "Passkey OAuth Client")
         self.assertEqual(config.passkey_oauth_redirect_uris, "")
-        self.assertEqual(config.passkey_oauth_demo_client_id, "passkey-demo-client")
         self.assertEqual(config.passkey_oauth_code_ttl_seconds, 300)
         self.assertEqual(config.passkey_oauth_access_token_ttl_seconds, 3600)
         self.assertEqual(config.passkey_oauth_challenge_ttl_seconds, 300)
-        self.assertTrue(config.passkey_database.endswith("passkeys.sqlite3"))
+        self.assertTrue(config.passkey_database.endswith("passkeys-v2.sqlite3"))
         self.assertFalse(config.passkey_trust_proxy_headers)
         self.assertEqual(config.passkey_proxy_fix_x_for, 1)
         self.assertEqual(config.passkey_proxy_fix_x_proto, 1)
@@ -97,6 +95,7 @@ class ConfigTest(unittest.TestCase):
         os.environ["PASSKEY_RP_ID"] = "xxxxx"
         os.environ["PASSKEY_ORIGIN"] = "https://auth.xxxxx"
         os.environ["PASSKEY_REGISTRATION_ENABLED"] = "true"
+        os.environ["PASSKEY_HOME_AUTH_ENABLED"] = "true"
         os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
         os.environ["PASSKEY_OAUTH_CLIENT_SECRET"] = "production-secret"
         os.environ["PASSKEY_OAUTH_CLIENT_NAME"] = "Production Client"
@@ -122,6 +121,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.passkey_rp_id, "xxxxx")
         self.assertEqual(config.passkey_origin, "https://auth.xxxxx")
         self.assertTrue(config.passkey_registration_enabled)
+        self.assertTrue(config.passkey_home_auth_enabled)
         self.assertEqual(config.passkey_oauth_client_id, "production-client")
         self.assertEqual(config.passkey_oauth_client_secret, "production-secret")
         self.assertEqual(config.passkey_oauth_client_name, "Production Client")
@@ -129,7 +129,6 @@ class ConfigTest(unittest.TestCase):
             config.passkey_oauth_redirect_uris,
             "https://app.example/callback,\nhttps://hyping.example/api/auth/callback",
         )
-        self.assertEqual(config.passkey_oauth_demo_client_id, "production-client")
         self.assertEqual(config.passkey_oauth_challenge_ttl_seconds, 90)
         self.assertEqual(config.passkey_database, "/tmp/passkey-test.sqlite3")
         self.assertTrue(config.passkey_trust_proxy_headers)
@@ -161,6 +160,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(mapping["SESSION_COOKIE_SAMESITE"], "Lax")
         self.assertFalse(mapping["SESSION_COOKIE_SECURE"])
         self.assertTrue(mapping["PASSKEY_SERVER_TIMING_ENABLED"])
+        self.assertTrue(mapping["PASSKEY_HOME_AUTH_ENABLED"])
         self.assertIn("PASSKEY_TELEMETRY_TOKEN_URL", mapping)
 
     def test_secure_cookie_env_can_override_https_origin_default(self) -> None:
@@ -170,17 +170,6 @@ class ConfigTest(unittest.TestCase):
         config = AppConfig.from_env(instance_path=self.tempdir.name)
 
         self.assertFalse(config.passkey_secure_cookies)
-
-    def test_legacy_demo_oauth_env_feeds_standard_client(self) -> None:
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_ID"] = "legacy-client"
-        os.environ["PASSKEY_OAUTH_DEMO_CLIENT_SECRET"] = "legacy-secret"
-        os.environ["PASSKEY_OAUTH_DEMO_REDIRECT_URI"] = "https://legacy.example/cb"
-
-        config = AppConfig.from_env(instance_path=self.tempdir.name)
-
-        self.assertEqual(config.passkey_oauth_client_id, "legacy-client")
-        self.assertEqual(config.passkey_oauth_client_secret, "legacy-secret")
-        self.assertEqual(config.passkey_oauth_redirect_uris, "https://legacy.example/cb")
 
     def test_server_config_defaults_and_overrides(self) -> None:
         config = ServerConfig.from_env()

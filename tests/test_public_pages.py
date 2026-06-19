@@ -7,12 +7,18 @@ from passkey_demo.app import create_app
 
 class PublicPageTest(unittest.TestCase):
     def setUp(self):
+        self.previous_home_auth = os.environ.get("PASSKEY_HOME_AUTH_ENABLED")
         os.environ["PASSKEY_DATABASE"] = ":memory:"
+        os.environ["PASSKEY_HOME_AUTH_ENABLED"] = "false"
         self.app = create_app()
         self.client = self.app.test_client()
 
     def tearDown(self):
         os.environ.pop("PASSKEY_DATABASE", None)
+        if self.previous_home_auth is None:
+            os.environ.pop("PASSKEY_HOME_AUTH_ENABLED", None)
+        else:
+            os.environ["PASSKEY_HOME_AUTH_ENABLED"] = self.previous_home_auth
         os.environ.pop("PASSKEY_TELEMETRY_TOKEN_URL", None)
         os.environ.pop("PASSKEY_TELEMETRY_API_KEY", None)
 
@@ -25,6 +31,50 @@ class PublicPageTest(unittest.TestCase):
         self.assertNotIn(b"main.js", response.data)
         self.assertNotIn(b"telemetry.js", response.data)
         self.assertNotIn(b"id=\"logo-button\"", response.data)
+
+    def test_index_enables_passkey_interactions_when_configured(self):
+        os.environ["PASSKEY_HOME_AUTH_ENABLED"] = "true"
+        app = create_app()
+        client = app.test_client()
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"/static/main.js", response.data)
+        self.assertIn(b"id=\"logo-button\"", response.data)
+        self.assertIn(b"id=\"status\"", response.data)
+
+    def test_me_returns_signed_in_username_and_logout_clears_session(self):
+        store = self.app.extensions["passkey_store"]
+        user = store.create_user("af01", b"a" * 32)
+        with self.client.session_transaction() as session:
+            session["signed_in_user_id"] = user.id
+            session["signed_in_session_version"] = user.session_version
+
+        response = self.client.get("/api/me")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {"authenticated": True, "user": {"username": "af01"}},
+        )
+
+        logout_response = self.client.post("/api/logout")
+
+        self.assertEqual(logout_response.status_code, 200)
+        self.assertEqual(
+            self.client.get("/api/me").get_json(),
+            {"authenticated": False},
+        )
+
+    def test_main_script_only_shows_session_status_on_home(self):
+        response = self.client.get("/static/main.js")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('window.location.pathname === "/"', body)
+        self.assertIn("window.location.reload()", body)
+        self.assertIn("refreshSession({ refreshNonHome: true })", body)
 
     def test_oauth_authorize_uses_jason_passkey_title(self):
         query = urlencode(

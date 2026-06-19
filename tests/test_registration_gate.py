@@ -68,6 +68,25 @@ class RegistrationGateTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data["register"]["clientPath"], "/api/ui/register-client.js")
 
+    def test_duplicate_username_is_rejected_before_options_are_created(self) -> None:
+        os.environ["PASSKEY_REGISTRATION_ENABLED"] = "true"
+        app = create_app()
+        app.testing = True
+        client = app.test_client()
+        store = app.extensions["passkey_store"]
+        store.create_user("jason", b"j" * 32)
+        with client.session_transaction() as session:
+            session["registration_unlocked"] = True
+            session["registration_unlock_expires_at"] = 9999999999
+
+        response = client.post(
+            "/api/register/options",
+            json={"username": "jason"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "用户名已注册")
+
 
 if __name__ == "__main__":
     unittest.main()

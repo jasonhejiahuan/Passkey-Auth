@@ -42,6 +42,30 @@ python3 -m venv .venv
 .venv/bin/python -m passkey_demo.app
 ```
 
+## 桌面 App 构建
+
+仓库提供 `.github/workflows/build-desktop-apps.yml`，可生成包含 Python
+运行时、依赖和前端资源的自包含程序：
+
+- Windows x64：`Passkey-Auth-windows-x64.zip`
+- Linux x64：`Passkey-Auth-linux-x64.tar.gz`
+- macOS Intel：`Passkey-Auth-macos-x64.zip`
+- macOS Apple Silicon：`Passkey-Auth-macos-arm64.zip`
+
+在 GitHub Actions 中手动运行 `Build desktop apps` 后，可从该次运行的
+**Artifacts** 下载。推送 `V*` 标签（例如 `V3.0.0`）时，产物还会自动附加到对应
+GitHub Release。
+
+桌面版本启动后会自动打开浏览器。数据库与固定的 Flask Session Secret 保存在
+当前用户的应用数据目录，而不是临时打包目录：
+
+- Windows：`%APPDATA%\Passkey-Auth`
+- macOS：`~/Library/Application Support/Passkey-Auth`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/Passkey-Auth`
+
+构建产物未进行 Apple Developer ID 或 Windows Authenticode 签名，因此首次启动时
+可能出现 Gatekeeper 或 SmartScreen 提示。正式公开分发时建议增加平台代码签名。
+
 当前版本使用全新的 v2 数据结构，默认数据库为
 `instance/passkeys-v2.sqlite3`。旧版 `passkeys.sqlite3` 不会自动迁移；如显式把
 `PASSKEY_DATABASE` 指向旧库，应用会拒绝启动并提示使用新数据库。

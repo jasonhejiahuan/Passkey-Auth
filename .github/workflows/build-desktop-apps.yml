@@ -1,0 +1,136 @@
+name: Build desktop apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "V*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test before packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript syntax
+        run: |
+          node --check passkey_demo/static/main.js
+          node --check passkey_demo/static/management.js
+
+  build:
+    name: Build ${{ matrix.artifact }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Passkey-Auth-windows-x64
+          - os: ubuntu-latest
+            artifact: Passkey-Auth-linux-x64
+          - os: macos-15-intel
+            artifact: Passkey-Auth-macos-x64
+          - os: macos-15
+            artifact: Passkey-Auth-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+      - name: Build Windows application
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name Passkey-Auth \
+            --paths . \
+            --add-data "passkey_demo/templates:passkey_demo/templates" \
+            --add-data "passkey_demo/static:passkey_demo/static" \
+            --collect-submodules webauthn \
+            packaging/desktop_entry.py
+      - name: Build Linux application
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --name Passkey-Auth \
+            --paths . \
+            --add-data "passkey_demo/templates:passkey_demo/templates" \
+            --add-data "passkey_demo/static:passkey_demo/static" \
+            --collect-submodules webauthn \
+            packaging/desktop_entry.py
+      - name: Build macOS application
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onedir \
+            --windowed \
+            --name Passkey-Auth \
+            --paths . \
+            --add-data "passkey_demo/templates:passkey_demo/templates" \
+            --add-data "passkey_demo/static:passkey_demo/static" \
+            --collect-submodules webauthn \
+            packaging/desktop_entry.py
+      - name: Verify packaged output
+        shell: bash
+        run: |
+          test -e dist/Passkey-Auth || test -e dist/Passkey-Auth.exe || test -d dist/Passkey-Auth.app
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Passkey-Auth.exe -DestinationPath "${{ matrix.artifact }}.zip"
+      - name: Package Linux artifact
+        if: runner.os == 'Linux'
+        run: tar -C dist -czf "${{ matrix.artifact }}.tar.gz" Passkey-Auth
+      - name: Package macOS artifact
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Passkey-Auth.app "${{ matrix.artifact }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Attach apps to GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          fail_on_unmatched_files: true

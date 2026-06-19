@@ -8,3 +8,6 @@ instance/
 **/instance/
 *.sqlite3
 *.db
+build/
+dist/
+*.spec

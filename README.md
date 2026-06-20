@@ -1,5 +1,3 @@
-![Status](https://img.shields.io/badge/Status-Alpha-orange)
-
 此项目正在重构，在此过程中更新比较快～
 
 # Passkey Auth

@@ -252,17 +252,9 @@ async function loginWithPasskey(options = {}) {
     showAuthenticatedStatus();
     return;
   }
-  await runPasskeyAction(async () => {
-    const username = options.username ?? "";
-    const { publicKey } = await postJson(apiPath("login", "options"), { username });
-    const assertion = await navigator.credentials.get({
-      publicKey: decodeRequestOptions(publicKey),
-    });
-
-    const payload = { credential: encodeAuthenticationCredential(assertion) };
-    await postJson(apiPath("login", "verify"), payload);
-    await refreshSession({ refreshNonHome: true });
-  });
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const query = new URLSearchParams({ return_to: returnTo });
+  window.location.assign(`/auth/passkey?${query}`);
 }
 
 async function loginWithoutUsername() {

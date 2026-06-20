@@ -11,8 +11,8 @@ Project direction, product intent, repository ownership, release decisions, and 
 OpenAI Codex contributed implementation, documentation, and repository-maintenance assistance, including:
 
 - Passkey registration and login flow refinement
-- OAuth authorization code flow demo
-- Third-party callback demo
+- OAuth authorization code flow and example client
+- Third-party callback example
 - Link challenge login flow
 - Server-side session verification API
 - Centralized configuration structure

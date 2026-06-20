@@ -7,8 +7,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from passkey_demo.app import create_app
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.app import create_app
+from jstu_passkey.storage import PasskeyStore
 from webauthn.helpers import bytes_to_base64url
 
 
@@ -103,15 +103,31 @@ class ManagementTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        self.assertIn('id="logout-button"', body)
+        self.assertIn("退出登录", body)
+        self.assertIn('class="toggle-row"', body)
+        self.assertIn('class="toggle-control"', body)
         self.assertIn("更改后自动保存", body)
         self.assertNotIn("保存高级设置", body)
         self.assertNotIn(">保存设置</button>", body)
+
+    def test_management_logout_returns_to_signed_out_home(self) -> None:
+        logout_response = self.client.post("/api/logout")
+
+        self.assertEqual(logout_response.status_code, 200)
+        self.assertEqual(logout_response.get_json(), {"ok": True})
+        management_response = self.client.get("/management")
+        self.assertEqual(management_response.status_code, 401)
 
     def test_management_script_preserves_active_view_in_url_hash(self) -> None:
         response = self.client.get("/static/management.js")
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn('requestJson("/api/logout", { method: "POST" })', body)
+        self.assertIn('window.location.replace("/")', body)
+        self.assertIn('class="toggle-row"', body)
+        self.assertIn('class="toggle-control"', body)
         self.assertIn('window.addEventListener("hashchange", showViewFromHash)', body)
         self.assertIn("window.location.hash.slice(1)", body)
         self.assertIn("window.history.pushState", body)
@@ -133,9 +149,12 @@ class ManagementTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["management_reauthenticated_at"] = 0
 
+        self.client.get("/auth/passkey?mode=reauth&return_to=/management")
+        with self.client.session_transaction() as session:
+            auth_flow_token = session["auth_flow_token"]
         options_response = self.client.post(
-            "/api/management/reauth/options",
-            headers={"X-CSRF-Token": "csrf-token"},
+            "/auth/passkey/options",
+            json={"mode": "reauth", "authFlowToken": auth_flow_token},
         )
 
         self.assertEqual(options_response.status_code, 200)
@@ -144,20 +163,21 @@ class ManagementTest(unittest.TestCase):
         self.assertEqual(len(public_key["allowCredentials"]), 1)
 
         with patch(
-            "passkey_demo.management.verify_authentication",
+            "jstu_passkey.app.verify_authentication",
             return_value=SimpleNamespace(
                 credential_id=credential_id,
                 new_sign_count=1,
+                user_handle=None,
             ),
         ):
             verify_response = self.client.post(
-                "/api/management/reauth/verify",
+                "/auth/passkey/verify",
                 json={
                     "credential": {
                         "rawId": bytes_to_base64url(credential_id),
-                    }
+                    },
+                    "authFlowToken": auth_flow_token,
                 },
-                headers={"X-CSRF-Token": "csrf-token"},
             )
 
         self.assertEqual(verify_response.status_code, 200)
@@ -183,16 +203,21 @@ class ManagementTest(unittest.TestCase):
             backed_up=False,
         )
         with self.client.session_transaction() as session:
-            session["management_reauth_challenge"] = "challenge"
+            session["authentication_challenge"] = "challenge"
+            session["authentication_user_id"] = self.admin.id
+            session["authentication_mode"] = "reauth"
+            session["auth_flow_token"] = "auth-flow-token"
 
         response = self.client.post(
-            "/api/management/reauth/verify",
-            json={"credential": {"rawId": bytes_to_base64url(credential_id)}},
-            headers={"X-CSRF-Token": "csrf-token"},
+            "/auth/passkey/verify",
+            json={
+                "credential": {"rawId": bytes_to_base64url(credential_id)},
+                "authFlowToken": "auth-flow-token",
+            },
         )
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn("当前管理员账户", response.get_json()["error"])
+        self.assertIn("当前用户名", response.get_json()["error"])
 
     def test_admin_cannot_remove_own_access(self) -> None:
         response = self.client.patch(

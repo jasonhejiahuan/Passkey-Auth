@@ -7,7 +7,7 @@ from pathlib import Path
 
 from unittest.mock import patch
 
-from passkey_demo.desktop import _open_browser_when_ready, configure_desktop_environment
+from jstu_passkey.desktop import _open_browser_when_ready, configure_desktop_environment
 
 
 class DesktopLauncherTest(unittest.TestCase):
@@ -48,8 +48,8 @@ class DesktopLauncherTest(unittest.TestCase):
         self.assertEqual(os.environ["PASSKEY_ORIGIN"], "http://localhost:5003")
         self.assertTrue((data_dir / "flask-secret").exists())
 
-    @patch("passkey_demo.desktop.webbrowser.open")
-    @patch("passkey_demo.desktop.socket.create_connection")
+    @patch("jstu_passkey.desktop.webbrowser.open")
+    @patch("jstu_passkey.desktop.socket.create_connection")
     def test_loopback_server_opens_localhost_origin(
         self,
         create_connection,

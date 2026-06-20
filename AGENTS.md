@@ -7,19 +7,19 @@ This repository welcomes agentic coding work. Optimize for small, correct, well-
 Read the project Wiki before broad changes:
 
 - Project overview: https://github.com/jasonhejiahuan/Passkey-Auth/wiki
-- Agent guide: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Agents-Vibe-Coding-Guide
-- OAuth integration: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/OAuth-and-SSO-Integration
-- Security model: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security-Model
+- Agent guide: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Development
+- Authentication flows: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Authentication-Flows
+- Security model: https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security
 
 ## Project Map
 
-- `passkey_demo/app.py`: Flask routes, OAuth flow, link challenge flow, session verify API.
-- `passkey_demo/config.py`: default config values and environment overrides.
-- `passkey_demo/storage.py`: SQLite users, credentials, OAuth codes, challenge requests.
-- `passkey_demo/management.py`: `/management` UI APIs, permissions, CSV export, and log cleanup.
-- `passkey_demo/webauthn_service.py`: WebAuthn option generation and verification.
-- `passkey_demo/static/`: browser passkey flows and UI behavior.
-- `passkey_demo/templates/`: minimal Auth WebUI and demo pages.
+- `jstu_passkey/app.py`: Flask routes, OAuth flow, link challenge flow, session verify API.
+- `jstu_passkey/config.py`: default config values and environment overrides.
+- `jstu_passkey/storage.py`: SQLite users, credentials, OAuth codes, challenge requests.
+- `jstu_passkey/management.py`: `/management` UI APIs, permissions, CSV export, and log cleanup.
+- `jstu_passkey/webauthn_service.py`: WebAuthn option generation and verification.
+- `jstu_passkey/static/`: browser passkey flows and UI behavior.
+- `jstu_passkey/templates/`: minimal Auth WebUI and dedicated example pages.
 - `tests/`: config, registration gate, OAuth, and challenge flow tests.
 
 ## Safety Invariants
@@ -48,7 +48,7 @@ Run tests with the local virtualenv:
 For local browser testing:
 
 ```bash
-PORT=5003 PASSKEY_ORIGIN=http://localhost:5003 .venv/bin/python -m passkey_demo.app
+PORT=5003 PASSKEY_ORIGIN=http://localhost:5003 .venv/bin/python -m jstu_passkey.app
 ```
 
 If you touch UI, check desktop and mobile layouts. If you touch auth, OAuth, storage, or config, add or update tests.

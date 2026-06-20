@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.storage import PasskeyStore
 
 
 class OAuthCodeStorageTest(unittest.TestCase):
@@ -20,7 +20,7 @@ class OAuthCodeStorageTest(unittest.TestCase):
 
     def test_authorization_code_uses_kdf_digest_and_is_consumed_once(self) -> None:
         code = self.store.create_oauth_authorization_code(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri="https://login.example/callback",
             user_id=self.user.id,
             ttl_seconds=300,
@@ -42,14 +42,14 @@ class OAuthCodeStorageTest(unittest.TestCase):
 
         consumed = self.store.consume_oauth_authorization_code(
             code=code,
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri="https://login.example/callback",
         )
         self.assertIsNotNone(consumed)
 
         replay = self.store.consume_oauth_authorization_code(
             code=code,
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri="https://login.example/callback",
         )
         self.assertIsNone(replay)

@@ -8,7 +8,7 @@
   {% endif %}
 {% endblock %}
 
-{% block body_attrs %}{% if ok %} data-oauth-authorize data-oauth-mode="{{ mode | default('code') }}" data-client-id="{{ client_id }}" data-redirect-uri="{{ redirect_uri }}" data-state="{{ state }}" data-challenge-id="{{ challenge_id | default('') }}" data-username="{{ username | default('') }}"{% endif %}{% endblock %}
+{% block body_attrs %}{% if ok %} data-oauth-authorize data-oauth-mode="{{ mode | default('code') }}" data-client-id="{{ client_id }}" data-redirect-uri="{{ redirect_uri }}" data-error-redirect-uri="{{ error_redirect_uri | default('') }}" data-state="{{ state }}" data-challenge-id="{{ challenge_id | default('') }}" data-username="{{ username | default('') }}" data-return-to="{{ return_to | default('/') }}" data-auth-flow-token="{{ auth_flow_token }}"{% endif %}{% endblock %}
 
 {% block logo %}
   {{ brand_logo(button_id="oauth-logo-button") }}

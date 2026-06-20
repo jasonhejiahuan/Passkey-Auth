@@ -14,7 +14,7 @@ python3 -m venv .venv
 ### 2. 启动应用（基础模式）
 
 ```bash
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 应用默认监听 `http://localhost:5003`
@@ -24,7 +24,7 @@ python3 -m venv .venv
 ### 场景 1：自定义端口
 
 ```bash
-PORT=5003 .venv/bin/python -m passkey_demo.app
+PORT=5003 .venv/bin/python -m jstu_passkey.app
 ```
 
 然后访问 `http://localhost:5003`
@@ -34,7 +34,7 @@ PORT=5003 .venv/bin/python -m passkey_demo.app
 ```bash
 PORT=5003 \
 PASSKEY_ORIGIN=http://localhost:5003 \
-.venv/bin/python -m passkey_demo.app --reregister-admin qpwoeiruty
+.venv/bin/python -m jstu_passkey.app --reregister-admin qpwoeiruty
 ```
 
 然后访问：
@@ -51,7 +51,7 @@ http://localhost:5003/qpwoeiruty
 PORT=5003 \
 HOST=0.0.0.0 \
 PASSKEY_ORIGIN=http://<YOUR_LOCAL_IP>:5003 \
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 替换 `<YOUR_LOCAL_IP>` 为你的本机局域网 IP（如 `192.168.1.100`）。
@@ -65,7 +65,7 @@ PORT=5003 \
 PASSKEY_ORIGIN=https://example.com \
 PASSKEY_TRUST_PROXY_HEADERS=true \
 PASSKEY_PROXY_FIX_X_PROTO=1 \
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 - `PASSKEY_TRUST_PROXY_HEADERS=true`：信任反向代理注入的 `X-Forwarded-*` 头
@@ -75,7 +75,7 @@ PASSKEY_PROXY_FIX_X_PROTO=1 \
 
 ```bash
 PASSKEY_DATABASE=/path/to/custom.sqlite3 \
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 默认数据库位置：`instance/passkeys-v2.sqlite3`
@@ -86,7 +86,7 @@ PASSKEY_DATABASE=/path/to/custom.sqlite3 \
 PORT=5003 \
 PASSKEY_ORIGIN=http://localhost:5003 \
 PASSKEY_REGISTRATION_ENABLED=true \
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 ## 常见环境变量
@@ -97,14 +97,14 @@ PASSKEY_REGISTRATION_ENABLED=true \
 | `HOST` | `localhost` | HTTP 监听地址 |
 | `PASSKEY_ORIGIN` | 自动检测 | WebAuthn origin（必须与浏览器 URL 一致）；为空时使用当前请求 origin |
 | `PASSKEY_RP_ID` | `localhost` | WebAuthn RP ID（通常是根域名） |
-| `PASSKEY_RP_NAME` | `Passkey Demo` | WebAuthn 弹窗显示的服务名称 |
+| `PASSKEY_RP_NAME` | `JSTU Passkey` | WebAuthn 弹窗显示的服务名称 |
 | `PASSKEY_REGISTRATION_ENABLED` | `false` | 是否默认开放注册 |
 | `PASSKEY_REGISTRATION_UNLOCK_TTL` | `120` | 注册解锁有效期（秒） |
 | `PASSKEY_DATABASE` | 空（使用默认） | SQLite 数据库路径 |
 | `FLASK_SECRET_KEY` | 随机生成 | Flask session 签名密钥；生产环境请设置固定值 |
 | `PASSKEY_SERVER_API_TOKEN` | 空 | 服务端会话验证 API 的 Bearer token |
-| `PASSKEY_OAUTH_CLIENT_ID` | `passkey-demo-client` | OAuth client ID |
-| `PASSKEY_OAUTH_CLIENT_SECRET` | `passkey-demo-secret` | OAuth client secret；生产环境请改强随机值 |
+| `PASSKEY_OAUTH_CLIENT_ID` | `jstu-passkey-client` | OAuth client ID |
+| `PASSKEY_OAUTH_CLIENT_SECRET` | `jstu-passkey-secret` | OAuth client secret；生产环境请改强随机值 |
 | `PASSKEY_OAUTH_CLIENT_NAME` | `Passkey OAuth Client` | OAuth client 名称 |
 | `PASSKEY_OAUTH_REDIRECT_URIS` | 空 | 额外允许的 OAuth callback URI（逗号或换行分隔） |
 | `PASSKEY_OAUTH_CODE_TTL` | `300` | OAuth authorization code 有效期（秒） |
@@ -128,7 +128,7 @@ PASSKEY_REGISTRATION_ENABLED=true \
 PORT=5003 \
 PASSKEY_ORIGIN=http://localhost:5003 \
 PASSKEY_REGISTRATION_ENABLED=true \
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 #### 方式 2：通过管理面板启用（生产推荐）
@@ -196,7 +196,7 @@ PASSKEY_REGISTRATION_ENABLED=true \
 **解决**：
 ```bash
 # 方案 1：启动时启用
-PASSKEY_REGISTRATION_ENABLED=true .venv/bin/python -m passkey_demo.app
+PASSKEY_REGISTRATION_ENABLED=true .venv/bin/python -m jstu_passkey.app
 
 # 方案 2：通过管理面板（需要管理员权限）
 # 登录 /management，进入注册管理，启用注册
@@ -250,7 +250,7 @@ PASSKEY_REGISTRATION_ENABLED=true .venv/bin/python -m passkey_demo.app
 ```bash
 PORT=5003 \
 PASSKEY_ORIGIN=http://localhost:5003 \
-.venv/bin/python -m passkey_demo.app --reregister-admin <your-token>
+.venv/bin/python -m jstu_passkey.app --reregister-admin <your-token>
 ```
 
 访问 `http://localhost:5003/<your-token>` 创建管理员账户。
@@ -293,10 +293,10 @@ instance/passkeys-v2.sqlite3
 
 ## 更多文档
 
-- **OAuth 接入**：见 [OAuth 接入开发文档](docs/oauth-integration.md)
-- **生产部署**：见 [项目 Wiki - Configuration and Deployment](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Configuration-and-Deployment)
-- **安全模型**：见 [项目 Wiki - Security Model](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security-Model)
-- **Agent 指南**：见 [项目 Wiki - Agents Vibe Coding Guide](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Agents-Vibe-Coding-Guide)
+- **OAuth 接入**：见 [Authentication Flows](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Authentication-Flows)
+- **生产部署**：见 [Deployment](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Deployment)
+- **安全模型**：见 [Security](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security)
+- **Agent 指南**：见 [Development](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Development)
 
 ## 常见问题
 
@@ -311,7 +311,7 @@ instance/passkeys-v2.sqlite3
 ### 端口被占用
 
 ```bash
-PORT=5001 .venv/bin/python -m passkey_demo.app
+PORT=5001 .venv/bin/python -m jstu_passkey.app
 ```
 
 改用其他端口，同时更新 `PASSKEY_ORIGIN`。

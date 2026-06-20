@@ -2,7 +2,7 @@ import os
 import unittest
 from urllib.parse import urlencode
 
-from passkey_demo.app import create_app
+from jstu_passkey.app import create_app
 
 
 class PublicPageTest(unittest.TestCase):
@@ -80,7 +80,7 @@ class PublicPageTest(unittest.TestCase):
         query = urlencode(
             {
                 "response_type": "code",
-                "client_id": "passkey-demo-client",
+                "client_id": "jstu-passkey-client",
                 "redirect_uri": "http://localhost/demo/oauth/callback",
                 "state": "state-value",
             }
@@ -91,6 +91,21 @@ class PublicPageTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"<title>Jason Passkey</title>", response.data)
         self.assertIn(b"oauth_authorize.js", response.data)
+
+    def test_standard_passkey_page_rejects_external_return_url(self):
+        response = self.client.get(
+            "/auth/passkey?return_to=https://evil.example/callback"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-oauth-mode="login"', body)
+        self.assertIn('data-return-to="/"', body)
+        self.assertIn("data-auth-flow-token=", body)
+
+    def test_legacy_login_api_is_removed(self):
+        self.assertEqual(self.client.post("/api/login/options").status_code, 404)
+        self.assertEqual(self.client.post("/api/login/verify").status_code, 404)
 
     def test_global_logo_size_stays_small(self):
         response = self.client.get("/static/styles.css")

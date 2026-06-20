@@ -25,8 +25,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Check JavaScript syntax
         run: |
-          node --check passkey_demo/static/main.js
-          node --check passkey_demo/static/management.js
+          node --check jstu_passkey/static/main.js
+          node --check jstu_passkey/static/management.js
 
   build:
     name: Build ${{ matrix.artifact }}
@@ -65,8 +65,8 @@ jobs:
             --windowed \
             --name Passkey-Auth \
             --paths . \
-            --add-data "passkey_demo/templates:passkey_demo/templates" \
-            --add-data "passkey_demo/static:passkey_demo/static" \
+            --add-data "jstu_passkey/templates:jstu_passkey/templates" \
+            --add-data "jstu_passkey/static:jstu_passkey/static" \
             --collect-submodules webauthn \
             packaging/desktop_entry.py
       - name: Build Linux application
@@ -78,8 +78,8 @@ jobs:
             --onefile \
             --name Passkey-Auth \
             --paths . \
-            --add-data "passkey_demo/templates:passkey_demo/templates" \
-            --add-data "passkey_demo/static:passkey_demo/static" \
+            --add-data "jstu_passkey/templates:jstu_passkey/templates" \
+            --add-data "jstu_passkey/static:jstu_passkey/static" \
             --collect-submodules webauthn \
             packaging/desktop_entry.py
       - name: Build macOS application
@@ -92,8 +92,8 @@ jobs:
             --windowed \
             --name Passkey-Auth \
             --paths . \
-            --add-data "passkey_demo/templates:passkey_demo/templates" \
-            --add-data "passkey_demo/static:passkey_demo/static" \
+            --add-data "jstu_passkey/templates:jstu_passkey/templates" \
+            --add-data "jstu_passkey/static:jstu_passkey/static" \
             --collect-submodules webauthn \
             packaging/desktop_entry.py
       - name: Verify packaged output

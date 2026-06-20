@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.storage import PasskeyStore
 
 
 class StorageV2Test(unittest.TestCase):

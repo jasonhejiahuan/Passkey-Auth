@@ -25,28 +25,51 @@ async function authorizeWithPasskey() {
   logoButton.disabled = true;
   setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   try {
-    const { publicKey } = await postJson("/api/login/options", {
+    const { publicKey } = await postJson("/auth/passkey/options", {
       username: root.dataset.username || "",
+      mode: root.dataset.oauthMode,
+      authFlowToken: root.dataset.authFlowToken,
     });
     const assertion = await navigator.credentials.get({
       publicKey: decodeRequestOptions(publicKey),
     });
-    await postJson("/api/login/verify", {
+    await postJson("/auth/passkey/verify", {
       credential: encodeAuthenticationCredential(assertion),
+      authFlowToken: root.dataset.authFlowToken,
     });
-    const result =
-      root.dataset.oauthMode === "challenge"
-        ? await postJson(
-            `/oauth/challenge/${encodeURIComponent(root.dataset.challengeId)}/complete`,
-            {},
-          )
-        : await postJson("/oauth/authorize/complete", {
-            client_id: root.dataset.clientId,
-            redirect_uri: root.dataset.redirectUri,
-            state: root.dataset.state,
-          });
+    let result;
+    if (root.dataset.oauthMode === "challenge") {
+      result = await postJson(
+        `/oauth/challenge/${encodeURIComponent(root.dataset.challengeId)}/complete`,
+        {},
+      );
+    } else if (root.dataset.oauthMode === "code") {
+      result = await postJson("/oauth/authorize/complete", {
+        client_id: root.dataset.clientId,
+        redirect_uri: root.dataset.redirectUri,
+        state: root.dataset.state,
+      });
+    } else {
+      result = { redirectUrl: root.dataset.returnTo || "/" };
+    }
     window.location.assign(result.redirectUrl);
   } catch (error) {
+    if (root.dataset.oauthMode === "code" && root.dataset.errorRedirectUri) {
+      const target = new URL(root.dataset.errorRedirectUri);
+      target.searchParams.set(
+        "error",
+        isPasskeyCancelError(error) ? "access_denied" : "authentication_failed",
+      );
+      target.searchParams.set(
+        "error_description",
+        isPasskeyCancelError(error)
+          ? "Passkey 验证已取消"
+          : error.message || String(error),
+      );
+      target.searchParams.set("state", root.dataset.state);
+      window.location.assign(target);
+      return;
+    }
     if (isPasskeyCancelError(error)) {
       setStatus("Passkey 验证已取消", "muted");
     } else {

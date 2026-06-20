@@ -4,8 +4,8 @@ import os
 import tempfile
 import unittest
 
-from passkey_demo.app import create_app
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.app import create_app
+from jstu_passkey.storage import PasskeyStore
 
 
 class ThirdPartyOAuthDemoTest(unittest.TestCase):
@@ -55,7 +55,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             "/oauth/authorize",
             query_string={
                 "response_type": "code",
-                "client_id": "passkey-demo-client",
+                "client_id": "jstu-passkey-client",
                 "redirect_uri": self.redirect_uri,
                 "state": "state-123",
             },
@@ -72,7 +72,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             "/oauth/authorize",
             query_string={
                 "response_type": "code",
-                "client_id": "passkey-demo-client",
+                "client_id": "jstu-passkey-client",
                 "redirect_uri": "http://localhost:8765/api/auth/callback",
                 "state": "state-123",
             },
@@ -82,6 +82,10 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('id="oauth-logo-button"', body)
         self.assertIn('data-redirect-uri="http://localhost:8765/api/auth/callback"', body)
+        self.assertIn(
+            'data-error-redirect-uri="http://localhost:8765/api/auth/error"',
+            body,
+        )
 
     def test_authorize_accepts_configured_production_callback(self) -> None:
         os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
@@ -105,6 +109,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('data-client-id="production-client"', body)
         self.assertIn('data-redirect-uri="https://app.example/callback"', body)
+        self.assertIn('data-error-redirect-uri=""', body)
 
     def test_token_exchange_accepts_configured_production_client(self) -> None:
         os.environ["PASSKEY_OAUTH_CLIENT_ID"] = "production-client"
@@ -145,10 +150,10 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         store.set_platform_policy(
             user.id,
             "deny_only",
-            ["passkey-demo-client"],
+            ["jstu-passkey-client"],
         )
         code = store.create_oauth_authorization_code(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri=self.redirect_uri,
             user_id=user.id,
             ttl_seconds=300,
@@ -159,8 +164,8 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             "/oauth/token",
             data={
                 "grant_type": "authorization_code",
-                "client_id": "passkey-demo-client",
-                "client_secret": "passkey-demo-secret",
+                "client_id": "jstu-passkey-client",
+                "client_secret": "jstu-passkey-secret",
                 "code": code,
                 "redirect_uri": self.redirect_uri,
             },
@@ -177,7 +182,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             {"admin": False, "login": True, "demo": False},
         )
         code = store.create_oauth_authorization_code(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri=self.redirect_uri,
             user_id=user.id,
             ttl_seconds=300,
@@ -188,8 +193,8 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             "/oauth/token",
             data={
                 "grant_type": "authorization_code",
-                "client_id": "passkey-demo-client",
-                "client_secret": "passkey-demo-secret",
+                "client_id": "jstu-passkey-client",
+                "client_secret": "jstu-passkey-secret",
                 "code": code,
                 "redirect_uri": self.redirect_uri,
             },
@@ -202,7 +207,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         store = PasskeyStore(self.database_path)
         user = store.create_user("jason", b"stable-token-user")
         code = store.create_oauth_authorization_code(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri=self.redirect_uri,
             user_id=user.id,
             ttl_seconds=300,
@@ -212,8 +217,8 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
             "/oauth/token",
             data={
                 "grant_type": "authorization_code",
-                "client_id": "passkey-demo-client",
-                "client_secret": "passkey-demo-secret",
+                "client_id": "jstu-passkey-client",
+                "client_secret": "jstu-passkey-secret",
                 "code": code,
                 "redirect_uri": self.redirect_uri,
             },
@@ -239,14 +244,14 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("client_id=production-client", body)
-        self.assertNotIn("client_id=passkey-demo-client", body)
+        self.assertNotIn("client_id=jstu-passkey-client", body)
 
     def test_authorize_rejects_unknown_callback(self) -> None:
         response = self.client.get(
             "/oauth/authorize",
             query_string={
                 "response_type": "code",
-                "client_id": "passkey-demo-client",
+                "client_id": "jstu-passkey-client",
                 "redirect_uri": "http://evil.example/callback",
                 "state": "state-123",
             },
@@ -271,7 +276,7 @@ class ThirdPartyOAuthDemoTest(unittest.TestCase):
         store = PasskeyStore(self.database_path)
         user = store.create_user("jason", b"stable-user-handle")
         code = store.create_oauth_authorization_code(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             redirect_uri=self.redirect_uri,
             user_id=user.id,
             ttl_seconds=300,

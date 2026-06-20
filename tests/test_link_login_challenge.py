@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
-from passkey_demo.app import create_app
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.app import create_app
+from jstu_passkey.storage import PasskeyStore
 
 
 class LinkLoginChallengeDemoTest(unittest.TestCase):
@@ -70,7 +70,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
 
     def test_auth_challenge_page_binds_username(self) -> None:
         challenge_id = self.store.create_oauth_challenge_request(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             return_uri=self.return_uri,
             username="jason",
             state="state-123",
@@ -89,7 +89,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
     def test_challenge_complete_and_callback_succeed_once(self) -> None:
         user = self.store.create_user("jason", b"stable-user-handle")
         challenge_id = self.store.create_oauth_challenge_request(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             return_uri=self.return_uri,
             username="jason",
             state="state-123",
@@ -132,7 +132,7 @@ class LinkLoginChallengeDemoTest(unittest.TestCase):
     def test_challenge_complete_rejects_wrong_signed_in_user(self) -> None:
         user = self.store.create_user("alice", b"stable-user-handle")
         challenge_id = self.store.create_oauth_challenge_request(
-            client_id="passkey-demo-client",
+            client_id="jstu-passkey-client",
             return_uri=self.return_uri,
             username="jason",
             state="state-123",

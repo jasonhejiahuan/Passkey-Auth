@@ -28,16 +28,16 @@
 
 推荐阅读路径：
 
-- 开发者接入：先读 [Quick Start](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Quick-Start)，再读 [OAuth and SSO Integration](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/OAuth-and-SSO-Integration)
-- 生产部署：读 [Configuration and Deployment](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Configuration-and-Deployment) 和 [Security Model](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security-Model)
-- AI coding agents / vibe coding：请优先读取 [Agents Vibe Coding Guide](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Agents-Vibe-Coding-Guide)，再根据任务查阅功能页；它包含项目地图、安全红线、推荐修改入口和测试策略
+- 开发者接入：先读 [Quick Start](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Quick-Start)，再读 [Authentication Flows](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Authentication-Flows)
+- 生产部署：读 [Deployment](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Deployment) 和 [Security](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Security)
+- AI coding agents / vibe coding：优先读取 [Development](https://github.com/jasonhejiahuan/Passkey-Auth/wiki/Development)，再根据任务进入认证、管理或部署页面
 
 ## 运行
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m passkey_demo.app
+.venv/bin/python -m jstu_passkey.app
 ```
 
 ## 桌面 App 构建
@@ -75,7 +75,7 @@ GitHub Release。
 ```bash
 PORT=5003 \
 PASSKEY_ORIGIN=http://localhost:5003 \
-.venv/bin/python -m passkey_demo.app --reregister-admin qpwoeiruty
+.venv/bin/python -m jstu_passkey.app --reregister-admin qpwoeiruty
 ```
 
 然后访问：
@@ -119,28 +119,28 @@ http://localhost:XXXX
 如果本机 `XXXX` 端口被占用，可以换端口。WebAuthn 的 origin 必须和浏览器地址一致：
 
 ```bash
-PORT=5001 PASSKEY_ORIGIN=http://localhost:5001 .venv/bin/python -m passkey_demo.app
+PORT=5001 PASSKEY_ORIGIN=http://localhost:5001 .venv/bin/python -m jstu_passkey.app
 ```
 
-未设置 `PASSKEY_ORIGIN` 时，demo 会自动使用当前请求地址，例如 `http://localhost:5002`。
+未设置 `PASSKEY_ORIGIN` 时，服务会自动使用当前请求地址，例如 `http://localhost:5002`。
 
 Passkey / WebAuthn 要求安全上下文。`localhost` 属于浏览器允许的安全上下文；如果部署到线上，请使用 HTTPS，并把 `PASSKEY_RP_ID` 和 `PASSKEY_ORIGIN` 改成你的真实域名。
 
 ## 环境变量
 
-默认配置集中在 `passkey_demo/config.py`，运行时仍可通过环境变量覆盖：
+默认配置集中在 `jstu_passkey/config.py`，运行时仍可通过环境变量覆盖：
 
 ```bash
 PASSKEY_RP_ID=localhost
 PASSKEY_ORIGIN=http://localhost:5000
-PASSKEY_RP_NAME="Passkey Demo"
+PASSKEY_RP_NAME="JSTU Passkey"
 PASSKEY_DATABASE=/path/to/passkeys-v2.sqlite3
 FLASK_SECRET_KEY=change-me
 PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_HOME_AUTH_ENABLED=true
 PASSKEY_SERVER_API_TOKEN=change-this-server-token
-PASSKEY_OAUTH_CLIENT_ID=passkey-demo-client
-PASSKEY_OAUTH_CLIENT_SECRET=passkey-demo-secret
+PASSKEY_OAUTH_CLIENT_ID=jstu-passkey-client
+PASSKEY_OAUTH_CLIENT_SECRET=jstu-passkey-secret
 PASSKEY_OAUTH_CLIENT_NAME="Passkey OAuth Client"
 PASSKEY_OAUTH_REDIRECT_URIS=http://localhost:8765/api/auth/callback
 PASSKEY_OAUTH_CHALLENGE_TTL_SECONDS=300
@@ -160,6 +160,10 @@ HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，
 `PASSKEY_SERVER_TIMING_ENABLED` 默认开启，会发送低敏的 `Server-Timing: app;dur=...`，方便在 Chrome DevTools 的 Network 面板里查看 Flask 应用处理总耗时；不包含 WebAuthn、OAuth、用户或 token 内部细节。
 
 ## 服务端验证 API
+
+浏览器中的 Passkey 登录和二次验证统一跳转到 `/auth/passkey` Logo 页面完成，
+验证成功后再返回发起页面。旧的通用 `/api/login/options` 和
+`/api/login/verify` 已删除，普通业务页面不能直接调用 WebAuthn 验证接口。
 
 浏览器登录成功后，前端接口只返回：
 
@@ -208,10 +212,10 @@ http://localhost:5002/demo/oauth
 
 流程：
 
-1. Demo Client 页面跳转到 `/oauth/authorize`
+1. OAuth Client 示例页面跳转到 `/oauth/authorize`
 2. Passkey-Auth 展示极简 Logo 页面，并自动呼出 passkey 验证
 3. 登录成功后回调到 `/demo/oauth/callback?code=...&state=...`
-4. Demo 后端使用 `client_id/client_secret/code/redirect_uri` 换取 token 和用户信息
+4. 示例回调后端使用 `client_id/client_secret/code/redirect_uri` 换取 token 和用户信息
 5. 页面显示登录成功或失败
 
 OAuth 相关端点：
@@ -226,8 +230,8 @@ GET  /oauth/userinfo
 默认 OAuth client：
 
 ```text
-client_id=passkey-demo-client
-client_secret=passkey-demo-secret
+client_id=jstu-passkey-client
+client_secret=jstu-passkey-secret
 redirect_uri=http://localhost:5002/demo/oauth/callback
 ```
 
@@ -244,7 +248,7 @@ http://localhost:8765/api/auth/callback
 OAuth Client 首次从 `PASSKEY_OAUTH_CLIENT_*` 导入全新数据库，后续在
 `/management` 中管理。旧的 `PASSKEY_OAUTH_DEMO_*` 配置不再读取。
 
-## 第三方网页跳转和跳回 Demo
+## 第三方网页跳转和回调示例
 
 启动后打开：
 
@@ -263,7 +267,7 @@ http://localhost:5002/demo/third-party
 
 这个页面会展示 `access_token`，只用于本地调试和理解 OAuth 回跳流程。生产环境不要把 access token 直接暴露在浏览器页面上。
 
-## 链接跳转 Challenge Demo
+## 链接跳转 Challenge 示例
 
 启动后打开：
 
@@ -271,7 +275,7 @@ http://localhost:5002/demo/third-party
 http://localhost:5002/demo/link-login
 ```
 
-这个 demo 模拟你描述的域名形态：
+这个示例模拟你描述的域名形态：
 
 ```text
 https://login.xxxxx/                 原网站登录页
@@ -305,11 +309,11 @@ PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'
 
 ## 可导入函数
 
-核心函数在 `passkey_demo.webauthn_service`：
+核心函数在 `jstu_passkey.webauthn_service`：
 
 - `build_registration_options(...)`
 - `verify_registration(...)`
 - `build_authentication_options(...)`
 - `verify_authentication(...)`
 
-Flask demo 只是其中一种使用方式。
+Flask 服务只是其中一种使用方式。

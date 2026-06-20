@@ -7,12 +7,12 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest import mock
 
-from passkey_demo.app import (
+from jstu_passkey.app import (
     _validate_admin_recovery_token,
     create_app,
     main,
 )
-from passkey_demo.storage import PasskeyStore
+from jstu_passkey.storage import PasskeyStore
 
 
 class AdminRecoveryTest(unittest.TestCase):
@@ -51,7 +51,7 @@ class AdminRecoveryTest(unittest.TestCase):
 
     def test_invalid_cli_token_prints_banner_and_does_not_start_server(self) -> None:
         output = StringIO()
-        with mock.patch("passkey_demo.app.app.run") as run, redirect_stderr(output):
+        with mock.patch("jstu_passkey.app.app.run") as run, redirect_stderr(output):
             status = main(["--reregister-admin", "management"])
         self.assertEqual(status, 2)
         run.assert_not_called()

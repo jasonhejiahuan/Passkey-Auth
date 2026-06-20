@@ -5,21 +5,15 @@ const statusOutput = document.querySelector("#management-status");
 const dialog = document.querySelector("#editor-dialog");
 const editorTitle = document.querySelector("#editor-title");
 const editorContent = document.querySelector("#editor-content");
-const reauthDialog = document.querySelector("#reauth-dialog");
-const reauthStatus = document.querySelector("#reauth-status");
-const reauthConfirm = document.querySelector("#reauth-confirm");
-const reauthCancel = document.querySelector("#reauth-cancel");
 let state = null;
 let settingsSaveChain = Promise.resolve();
-let reauthPromise = null;
-let resolveReauth = null;
-let rejectReauth = null;
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
 });
 window.addEventListener("hashchange", showViewFromHash);
 document.querySelector("#refresh-button").addEventListener("click", loadOverview);
+document.querySelector("#logout-button").addEventListener("click", logout);
 document.querySelector("#user-search").addEventListener("input", renderUsers);
 document.querySelector("#new-platform-button").addEventListener("click", openNewPlatform);
 document.querySelector("#registration-settings").addEventListener("change", saveRegistration);
@@ -27,13 +21,6 @@ document.querySelector("#passkey-settings").addEventListener("change", handlePas
 document.querySelectorAll("[data-clear-log]").forEach((button) => {
   button.addEventListener("click", () => clearLogs(button.dataset.clearLog));
 });
-reauthConfirm.addEventListener("click", verifyRecentPasskey);
-reauthCancel.addEventListener("click", cancelRecentPasskey);
-reauthDialog.addEventListener("cancel", (event) => {
-  event.preventDefault();
-  cancelRecentPasskey();
-});
-
 showViewFromHash();
 loadOverview();
 
@@ -43,6 +30,20 @@ async function loadOverview() {
     renderAll();
     setStatus("数据已更新", "success", true);
   } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+async function logout() {
+  const button = document.querySelector("#logout-button");
+  button.disabled = true;
+  button.textContent = "正在退出…";
+  try {
+    await requestJson("/api/logout", { method: "POST" });
+    window.location.replace("/");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "退出登录";
     setStatus(error.message, "error");
   }
 }
@@ -121,7 +122,7 @@ function renderPlatforms() {
       </div>
       <span class="badge ${platform.enabled ? "is-on" : "is-off"}">${platform.enabled ? "已启用" : "已停用"}</span>
       <span>${platform.redirectUris.length} 回调</span>
-      <span>${platform.isDemo ? "内置 Demo" : "OAuth Client"}</span>
+      <span>${platform.isDemo ? "内置示例" : "OAuth Client"}</span>
       <button data-edit-platform="${escapeHtml(platform.clientId)}">管理</button>
     </article>
   `);
@@ -236,8 +237,9 @@ function openUser(userId) {
         ${permissionToggle("login", user.permissions.login)}
         ${permissionToggle("demo", user.permissions.demo)}
       </div>
-      <label class="switch-row">
+      <label class="toggle-row">
         <input id="edit-disabled" type="checkbox" ${user.disabledAt ? "checked" : ""}>
+        <span class="toggle-control" aria-hidden="true"></span>
         <span>停用账户</span>
       </label>
     </section>
@@ -378,7 +380,7 @@ function platformEditor(platform = null) {
       <label>平台名称<input id="platform-name" value="${escapeHtml(platform?.name || "")}"></label>
       <label>Client ID<input id="platform-client-id" value="${escapeHtml(platform?.clientId || "")}" ${platform ? "disabled" : ""}></label>
       <label>回调地址<textarea id="platform-redirects">${escapeHtml((platform?.redirectUris || []).join("\n"))}</textarea></label>
-      ${platform ? `<label class="switch-row"><input id="platform-enabled" type="checkbox" ${platform.enabled ? "checked" : ""}><span>启用平台</span></label>` : ""}
+      ${platform ? `<label class="toggle-row"><input id="platform-enabled" type="checkbox" ${platform.enabled ? "checked" : ""}><span class="toggle-control" aria-hidden="true"></span><span>启用平台</span></label>` : ""}
     </section>
     <div class="editor-actions">
       <button type="button" class="primary-button" id="save-platform">保存</button>
@@ -510,8 +512,10 @@ async function requestJson(url, options = {}) {
   const response = await fetch(url, init);
   const data = await response.json();
   if (response.status === 428 && !options.skipReauth) {
-    await requireRecentPasskey();
-    return requestJson(url, { ...options, skipReauth: true });
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const query = new URLSearchParams({ mode: "reauth", return_to: returnTo });
+    window.location.assign(`/auth/passkey?${query}`);
+    throw new Error("正在前往标准 Passkey 验证页面");
   }
   if (!response.ok) {
     const error = new Error(data.error || "请求失败");
@@ -521,122 +525,6 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
-function requireRecentPasskey() {
-  if (reauthPromise) return reauthPromise;
-  reauthStatus.hidden = true;
-  reauthStatus.textContent = "";
-  reauthConfirm.disabled = false;
-  reauthDialog.showModal();
-  reauthPromise = new Promise((resolve, reject) => {
-    resolveReauth = resolve;
-    rejectReauth = reject;
-  });
-  return reauthPromise;
-}
-
-async function verifyRecentPasskey() {
-  reauthConfirm.disabled = true;
-  setReauthStatus("等待浏览器 Passkey 操作…", "muted");
-  try {
-    if (!window.isSecureContext || !window.PublicKeyCredential) {
-      throw new Error("请使用 HTTPS 或 localhost，并确认浏览器支持 Passkey");
-    }
-    const { publicKey } = await requestJson("/api/management/reauth/options", {
-      method: "POST",
-      skipReauth: true,
-    });
-    const assertion = await navigator.credentials.get({
-      publicKey: decodeRequestOptions(publicKey),
-    });
-    await requestJson("/api/management/reauth/verify", {
-      method: "POST",
-      body: { credential: encodeAuthenticationCredential(assertion) },
-      skipReauth: true,
-    });
-    reauthDialog.close();
-    resolveReauth?.();
-    clearReauthPromise();
-    setStatus("身份验证完成，已继续操作", "success", true);
-  } catch (error) {
-    if (isPasskeyCancelError(error)) {
-      setReauthStatus("Passkey 验证已取消", "muted");
-    } else {
-      setReauthStatus(error.message || String(error), "error");
-    }
-    reauthConfirm.disabled = false;
-  }
-}
-
-function cancelRecentPasskey() {
-  reauthDialog.close();
-  rejectReauth?.(new Error("操作已取消，未进行任何更改"));
-  clearReauthPromise();
-}
-
-function clearReauthPromise() {
-  reauthPromise = null;
-  resolveReauth = null;
-  rejectReauth = null;
-}
-
-function setReauthStatus(message, kind) {
-  reauthStatus.hidden = false;
-  reauthStatus.textContent = message;
-  reauthStatus.dataset.kind = kind;
-}
-
-function decodeRequestOptions(options) {
-  return {
-    ...options,
-    challenge: base64urlToBuffer(options.challenge),
-    allowCredentials: (options.allowCredentials || []).map((descriptor) => ({
-      ...descriptor,
-      id: base64urlToBuffer(descriptor.id),
-    })),
-  };
-}
-
-function encodeAuthenticationCredential(credential) {
-  const response = credential.response;
-  return {
-    id: credential.id,
-    rawId: bufferToBase64url(credential.rawId),
-    type: credential.type,
-    authenticatorAttachment: credential.authenticatorAttachment || null,
-    response: {
-      clientDataJSON: bufferToBase64url(response.clientDataJSON),
-      authenticatorData: bufferToBase64url(response.authenticatorData),
-      signature: bufferToBase64url(response.signature),
-      userHandle: response.userHandle
-        ? bufferToBase64url(response.userHandle)
-        : null,
-    },
-    clientExtensionResults: credential.getClientExtensionResults(),
-  };
-}
-
-function base64urlToBuffer(value) {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
-  const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-  return bytes.buffer;
-}
-
-function bufferToBase64url(buffer) {
-  const binary = String.fromCharCode(...new Uint8Array(buffer));
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function isPasskeyCancelError(error) {
-  return (
-    error instanceof DOMException &&
-    ["AbortError", "NotAllowedError", "TimeoutError"].includes(error.name)
-  );
-}
-
 function renderList(selector, items, renderer) {
   document.querySelector(selector).innerHTML = items.length
     ? items.map(renderer).join("")
@@ -644,8 +532,9 @@ function renderList(selector, items, renderer) {
 }
 
 function permissionToggle(key, checked) {
-  return `<label class="switch-row">
+  return `<label class="toggle-row">
     <input id="permission-${key}" type="checkbox" ${checked ? "checked" : ""}>
+    <span class="toggle-control" aria-hidden="true"></span>
     <span>${key}</span>
   </label>`;
 }

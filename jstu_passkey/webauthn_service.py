@@ -30,7 +30,7 @@ from webauthn.helpers.structs import (
 class WebAuthnConfig:
     rp_id: str
     origin: str | Sequence[str]
-    rp_name: str = "Passkey Demo"
+    rp_name: str = "JSTU Passkey"
     timeout_ms: int = 60_000
     require_user_verification: bool = False
     algorithms: tuple[int, ...] = (-7, -8, -257)

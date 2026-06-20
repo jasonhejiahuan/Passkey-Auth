@@ -55,7 +55,9 @@ button:hover, .button-link:hover { border-color: var(--line-strong); }
 nav { display: grid; gap: 5px; }
 .nav-item { border-color: transparent; background: transparent; text-align: left; }
 .nav-item.is-active { background: var(--accent); color: var(--accent-text); }
-.quiet-button { margin-top: auto; color: var(--muted); }
+.sidebar-actions { margin-top: auto; display: grid; gap: 8px; }
+.quiet-button { color: var(--muted); }
+.logout-button { color: var(--danger); }
 .workspace { padding: 40px clamp(20px, 4vw, 64px); min-width: 0; }
 .workspace-header {
   display: flex;
@@ -163,6 +165,59 @@ legend { padding: 0 7px; color: var(--muted); font-size: 14px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: 14px; }
 .switch-row { grid-template-columns: auto 1fr; align-items: center; }
 .switch-row input { width: 18px; min-height: 18px; }
+.toggle-row {
+  position: relative;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 11px;
+  cursor: pointer;
+}
+.toggle-row input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.toggle-control {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.toggle-control::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 24%);
+  transition: transform 160ms ease;
+}
+.toggle-row input:checked + .toggle-control {
+  border-color: var(--success);
+  background: var(--success);
+}
+.toggle-row input:checked + .toggle-control::after {
+  transform: translateX(18px);
+}
+.toggle-row input:focus-visible + .toggle-control {
+  outline: 3px solid color-mix(in srgb, var(--success) 28%, transparent);
+  outline-offset: 2px;
+}
+.toggle-row:hover .toggle-control { border-color: var(--text); }
+.toggle-row input:disabled + .toggle-control,
+.toggle-row input:disabled ~ span {
+  cursor: not-allowed;
+  opacity: .5;
+}
 dialog {
   width: min(680px, calc(100% - 28px));
   max-height: calc(100vh - 40px);
@@ -191,11 +246,6 @@ dialog form > header {
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .permission-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .credential-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
-.compact-dialog { width: min(460px, calc(100% - 28px)); }
-.reauth-panel { display: grid; gap: 18px; padding: 24px; }
-#reauth-status { color: var(--muted); }
-#reauth-status[data-kind="error"] { color: var(--danger); }
-
 @media (max-width: 760px) {
   .management-shell { grid-template-columns: 1fr; }
   .sidebar {
@@ -211,6 +261,8 @@ dialog form > header {
   }
   .brand span, .quiet-button { display: none; }
   .brand picture { width: 32px; }
+  .sidebar-actions { margin-top: 0; }
+  .logout-button { width: 100%; }
   nav { display: flex; overflow-x: auto; }
   .nav-item { white-space: nowrap; }
   .workspace { width: 100%; padding: 24px 16px 50px; }

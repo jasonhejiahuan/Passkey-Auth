@@ -32,7 +32,10 @@
           <button class="nav-item" data-view="settings">设置</button>
           <button class="nav-item" data-view="passkey-settings">Passkey 高级设置</button>
         </nav>
-        <button id="refresh-button" class="quiet-button">刷新数据</button>
+        <div class="sidebar-actions">
+          <button id="refresh-button" class="quiet-button">刷新数据</button>
+          <button id="logout-button" class="logout-button">退出登录</button>
+        </div>
       </aside>
 
       <main class="workspace">
@@ -95,9 +98,10 @@
               临时开放至
               <input name="enabledUntil" type="datetime-local">
             </label>
-            <label class="switch-row">
+            <label class="toggle-row">
               <input name="defaultDemoAllowed" type="checkbox">
-              <span>新用户默认允许使用 Demo</span>
+              <span class="toggle-control" aria-hidden="true"></span>
+              <span>新用户默认允许使用内置示例</span>
             </label>
           </form>
         </section>
@@ -180,8 +184,9 @@
               </label>
             </div>
 
-            <label class="switch-row">
+            <label class="toggle-row">
               <input name="excludeCredentials" type="checkbox">
+              <span class="toggle-control" aria-hidden="true"></span>
               <span>注册时排除账户已有凭据，避免重复注册</span>
             </label>
           </form>
@@ -199,19 +204,5 @@
       </form>
     </dialog>
 
-    <dialog id="reauth-dialog" class="compact-dialog">
-      <section class="reauth-panel">
-        <div>
-          <p class="eyebrow">安全确认</p>
-          <h2>确认是你本人</h2>
-          <p class="muted">当前登录保持不变。使用这个管理员账户的 Passkey 验证后，将自动继续刚才的操作。</p>
-        </div>
-        <output id="reauth-status" role="status" aria-live="polite" hidden></output>
-        <div class="editor-actions">
-          <button id="reauth-confirm" class="primary-button" type="button">使用 Passkey 验证</button>
-          <button id="reauth-cancel" type="button">取消</button>
-        </div>
-      </section>
-    </dialog>
   </body>
 </html>

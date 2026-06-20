@@ -25,7 +25,7 @@ class AppConfig:
     passkey_rp_id: str = "localhost"
 
     # 浏览器 passkey 弹窗里显示的服务名称。
-    passkey_rp_name: str = "Passkey Demo"
+    passkey_rp_name: str = "JSTU Passkey"
 
     # WebAuthn origin；为空时自动使用当前请求 origin。
     passkey_origin: str | None = None
@@ -42,11 +42,11 @@ class AppConfig:
     # 服务端 session 验证 API 的 Bearer token；空值表示不可用。
     passkey_server_api_token: str = ""
 
-    # 标准 OAuth client_id；demo 页面也使用同一套 client 配置。
-    passkey_oauth_client_id: str = "passkey-demo-client"
+    # 标准 OAuth client_id；示例页面也使用同一套 client 配置。
+    passkey_oauth_client_id: str = "jstu-passkey-client"
 
     # 标准 OAuth client_secret；生产环境请改成强随机值。
-    passkey_oauth_client_secret: str = "passkey-demo-secret"
+    passkey_oauth_client_secret: str = "jstu-passkey-secret"
 
     # 标准 OAuth client 名称。
     passkey_oauth_client_name: str = "Passkey OAuth Client"

@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest import mock
 
-from passkey_demo.app import create_app
+from jstu_passkey.app import create_app
 
 
 class TelemetryIntegrationTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class TelemetryIntegrationTest(unittest.TestCase):
             {"status": "created", "status_path": "/v12/browser/token/status"}
         )
 
-        with mock.patch("passkey_demo.app.urlopen", return_value=telemetry_response) as urlopen:
+        with mock.patch("jstu_passkey.app.urlopen", return_value=telemetry_response) as urlopen:
             response = self.client.post(
                 "/api/telemetry/browser-token",
                 json={"path": "/", "referrer": ""},

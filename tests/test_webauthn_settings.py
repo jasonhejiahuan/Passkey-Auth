@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from passkey_demo.webauthn_service import WebAuthnConfig, build_registration_options
+from jstu_passkey.webauthn_service import WebAuthnConfig, build_registration_options
 
 
 class WebAuthnSettingsTest(unittest.TestCase):

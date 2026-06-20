@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from passkey_demo.app import create_app
+from jstu_passkey.app import create_app
 
 
 class RegistrationGateTest(unittest.TestCase):

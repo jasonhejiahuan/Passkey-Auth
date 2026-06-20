@@ -7,6 +7,7 @@ import time
 import json
 import re
 import sys
+from dataclasses import replace
 from base64 import b64decode
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
@@ -84,6 +85,28 @@ def create_app() -> Flask:
         return render_template(
             "index.html",
             home_auth_enabled=app.config["PASSKEY_HOME_AUTH_ENABLED"],
+        )
+
+    @app.get("/auth/passkey")
+    def passkey_auth_page():
+        return_to = _safe_local_return_path(request.args.get("return_to", "/"))
+        mode = request.args.get("mode", "login")
+        if mode not in {"login", "reauth"}:
+            mode = "login"
+        if mode == "reauth" and not _current_user(store, session):
+            mode = "login"
+        return render_template(
+            "oauth_authorize.html",
+            ok=True,
+            mode=mode,
+            client_name="",
+            client_id="",
+            redirect_uri="",
+            state="",
+            challenge_id="",
+            username="",
+            return_to=return_to,
+            auth_flow_token=_new_auth_flow_token(),
         )
 
     @app.get("/api/me")
@@ -354,6 +377,7 @@ def create_app() -> Flask:
             state=challenge.state,
             challenge_id=challenge.challenge_id,
             username=challenge.username,
+            auth_flow_token=_new_auth_flow_token(),
         )
 
     @app.post("/oauth/challenge/<challenge_id>/complete")
@@ -458,6 +482,8 @@ def create_app() -> Flask:
             state=state,
             challenge_id="",
             username="",
+            auth_flow_token=_new_auth_flow_token(),
+            error_redirect_uri=_oauth_error_redirect_uri(redirect_uri),
         )
 
     @app.post("/oauth/authorize/complete")
@@ -710,12 +736,24 @@ def create_app() -> Flask:
         session["management_reauthenticated_at"] = int(time.time())
         return _no_store(jsonify({"ok": True}))
 
-    @app.post("/api/login/options")
-    def login_options():
+    @app.post("/auth/passkey/options")
+    def passkey_auth_options():
         data = request.get_json(force=True)
+        if not _valid_auth_flow_token(data.get("authFlowToken")):
+            return _error("Passkey 验证页面已过期，请重新打开", 403)
         username = (data.get("username") or "").strip()
+        mode = data.get("mode", "login")
+        if mode not in {"login", "reauth", "code", "challenge"}:
+            return _error("无效的 Passkey 验证模式", 400)
         credentials = None
-        if username:
+        expected_user = _current_user(store, session) if mode == "reauth" else None
+        if mode == "reauth":
+            if not expected_user:
+                return _error("登录会话已过期", 401)
+            credentials = store.list_credentials_for_user(expected_user.id)
+            if not credentials:
+                return _error("当前账户没有可用于验证的 Passkey", 409)
+        elif username:
             username = normalize_username(username)
             user = store.get_user_by_username(username)
             if not user:
@@ -727,23 +765,36 @@ def create_app() -> Flask:
             if not credentials:
                 return _error("这个用户还没有注册 Passkey", 404)
 
+        webauthn_config = _config(app)
+        if mode == "reauth":
+            webauthn_config = replace(
+                webauthn_config,
+                require_user_verification=True,
+                user_verification="required",
+            )
         public_key, challenge = build_authentication_options(
             allowed_credentials=[
                 credential_for_options(credential) for credential in credentials
             ]
             if credentials is not None
             else None,
-            config=_config(app),
+            config=webauthn_config,
         )
         session["authentication_challenge"] = challenge
-        session["authentication_user_id"] = user.id if username else None
+        session["authentication_user_id"] = (
+            expected_user.id if expected_user else user.id if username else None
+        )
+        session["authentication_mode"] = mode
         return jsonify({"publicKey": public_key})
 
-    @app.post("/api/login/verify")
-    def login_verify():
+    @app.post("/auth/passkey/verify")
+    def passkey_auth_verify():
         data = request.get_json(force=True)
+        if not _valid_auth_flow_token(data.get("authFlowToken")):
+            return _error("Passkey 验证页面已过期，请重新打开", 403)
         challenge = session.get("authentication_challenge")
         user_id = session.get("authentication_user_id")
+        mode = session.get("authentication_mode")
         if not challenge:
             return _error("登录会话已过期，请重新开始登录", 400)
 
@@ -760,12 +811,19 @@ def create_app() -> Flask:
                 return _error("这个 Passkey 不属于当前用户名", 403)
 
         try:
+            webauthn_config = _config(app)
+            if mode == "reauth":
+                webauthn_config = replace(
+                    webauthn_config,
+                    require_user_verification=True,
+                    user_verification="required",
+                )
             result = verify_authentication(
                 credential=credential_json,
                 expected_challenge=challenge,
                 credential_public_key=credential.public_key,
                 credential_current_sign_count=credential.sign_count,
-                config=_config(app),
+                config=webauthn_config,
             )
         except WebAuthnException:
             failed_user = user or store.get_user_by_id(credential.user_id)
@@ -813,6 +871,8 @@ def create_app() -> Flask:
         store.update_sign_count(result.credential_id, result.new_sign_count)
         session.pop("authentication_challenge", None)
         session.pop("authentication_user_id", None)
+        session.pop("authentication_mode", None)
+        session.pop("auth_flow_token", None)
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
         session["management_reauthenticated_at"] = int(time.time())
@@ -826,7 +886,7 @@ def create_app() -> Flask:
             user_agent=request.headers.get("User-Agent", ""),
             sub=bytes_to_base64url(user.user_handle),
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "mode": mode or "login"})
 
     @app.post("/api/logout")
     def logout():
@@ -944,6 +1004,41 @@ def _config(app: Flask) -> WebAuthnConfig:
         attestation=settings.attestation,
         exclude_credentials=settings.exclude_credentials,
         hints=tuple(settings.hints),
+    )
+
+
+def _safe_local_return_path(value: str | None) -> str:
+    candidate = (value or "/").strip()
+    parsed = urlsplit(candidate)
+    if (
+        not candidate.startswith("/")
+        or candidate.startswith("//")
+        or parsed.scheme
+        or parsed.netloc
+    ):
+        return "/"
+    return candidate
+
+
+def _oauth_error_redirect_uri(redirect_uri: str) -> str:
+    parsed = urlsplit(redirect_uri)
+    if parsed.path != "/api/auth/callback":
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, "/api/auth/error", "", ""))
+
+
+def _new_auth_flow_token() -> str:
+    token = secrets.token_urlsafe(24)
+    session["auth_flow_token"] = token
+    return token
+
+
+def _valid_auth_flow_token(value: object) -> bool:
+    expected = session.get("auth_flow_token")
+    return bool(
+        expected
+        and isinstance(value, str)
+        and secrets.compare_digest(str(expected), value)
     )
 
 
@@ -1654,7 +1749,7 @@ def _print_startup_error(reason: str, token: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m passkey_demo.app")
+    parser = argparse.ArgumentParser(prog="python -m jstu_passkey.app")
     parser.add_argument("--reregister-admin", metavar="TOKEN")
     args = parser.parse_args(argv)
     server_config = ServerConfig.from_env()

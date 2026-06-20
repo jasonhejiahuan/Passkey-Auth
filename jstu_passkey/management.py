@@ -8,17 +8,10 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
-from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
-from webauthn.helpers.exceptions import WebAuthnException
+from webauthn.helpers import bytes_to_base64url
 
 from .storage import PasskeyStore, User
-from .webauthn_service import (
-    WebAuthnConfig,
-    build_authentication_options,
-    credential_for_options,
-    normalize_username,
-    verify_authentication,
-)
+from .webauthn_service import normalize_username
 
 
 def create_management_blueprint() -> Blueprint:
@@ -104,62 +97,6 @@ def create_management_blueprint() -> Blueprint:
                 }
             )
         )
-
-    @blueprint.post("/api/management/reauth/options")
-    def reauth_options():
-        actor = _require_admin()
-        if not isinstance(actor, User):
-            return actor
-        csrf_error = _require_csrf()
-        if csrf_error:
-            return csrf_error
-        credentials = _store().list_credentials_for_user(actor.id)
-        if not credentials:
-            return _error("当前账户没有可用于验证的 Passkey", 409)
-        public_key, challenge = build_authentication_options(
-            allowed_credentials=[
-                credential_for_options(credential) for credential in credentials
-            ],
-            config=_management_webauthn_config(require_user_verification=True),
-        )
-        session["management_reauth_challenge"] = challenge
-        return _no_store(jsonify({"ok": True, "publicKey": public_key}))
-
-    @blueprint.post("/api/management/reauth/verify")
-    def reauth_verify():
-        actor = _require_admin()
-        if not isinstance(actor, User):
-            return actor
-        csrf_error = _require_csrf()
-        if csrf_error:
-            return csrf_error
-        challenge = session.get("management_reauth_challenge")
-        if not challenge:
-            return _error("验证会话已过期，请重新开始", 400)
-
-        credential_json = (request.get_json(force=True) or {}).get("credential", {})
-        credential_id = base64url_to_bytes(credential_json.get("rawId", ""))
-        credential = _store().get_credential_by_id(credential_id)
-        if not credential or credential.user_id != actor.id:
-            session.pop("management_reauth_challenge", None)
-            return _error("必须使用当前管理员账户的 Passkey", 403)
-        try:
-            result = verify_authentication(
-                credential=credential_json,
-                expected_challenge=str(challenge),
-                credential_public_key=credential.public_key,
-                credential_current_sign_count=credential.sign_count,
-                config=_management_webauthn_config(require_user_verification=True),
-            )
-        except WebAuthnException:
-            session.pop("management_reauth_challenge", None)
-            raise
-
-        _store().update_sign_count(result.credential_id, result.new_sign_count)
-        session.pop("management_reauth_challenge", None)
-        session["management_reauthenticated_at"] = int(time.time())
-        _audit(actor, "management.reauthenticate", "session", str(actor.id), {})
-        return _no_store(jsonify({"ok": True}))
 
     @blueprint.patch("/api/management/users/<int:user_id>")
     def update_user(user_id: int):
@@ -476,21 +413,6 @@ def _require_csrf():
     if not expected or not secrets.compare_digest(str(expected), provided):
         return _error("CSRF 校验失败", 403)
     return None
-
-
-def _management_webauthn_config(
-    *,
-    require_user_verification: bool,
-) -> WebAuthnConfig:
-    settings = _store().get_passkey_settings()
-    origin = current_app.config["PASSKEY_ORIGIN"] or request.host_url.rstrip("/")
-    return WebAuthnConfig(
-        rp_id=current_app.config["PASSKEY_RP_ID"],
-        rp_name=current_app.config["PASSKEY_RP_NAME"],
-        origin=origin,
-        require_user_verification=require_user_verification,
-        user_verification="required" if require_user_verification else settings.user_verification,
-    )
 
 
 def _audit(

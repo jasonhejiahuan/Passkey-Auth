@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from passkey_demo.config import AppConfig, ServerConfig
+from jstu_passkey.config import AppConfig, ServerConfig
 
 
 class ConfigTest(unittest.TestCase):
@@ -61,13 +61,13 @@ class ConfigTest(unittest.TestCase):
         config = AppConfig.from_env(instance_path=self.tempdir.name)
 
         self.assertEqual(config.passkey_rp_id, "localhost")
-        self.assertEqual(config.passkey_rp_name, "Passkey Demo")
+        self.assertEqual(config.passkey_rp_name, "JSTU Passkey")
         self.assertIsNone(config.passkey_origin)
         self.assertEqual(config.register_unlock_ttl_seconds, 120)
         self.assertFalse(config.passkey_registration_enabled)
         self.assertTrue(config.passkey_home_auth_enabled)
-        self.assertEqual(config.passkey_oauth_client_id, "passkey-demo-client")
-        self.assertEqual(config.passkey_oauth_client_secret, "passkey-demo-secret")
+        self.assertEqual(config.passkey_oauth_client_id, "jstu-passkey-client")
+        self.assertEqual(config.passkey_oauth_client_secret, "jstu-passkey-secret")
         self.assertEqual(config.passkey_oauth_client_name, "Passkey OAuth Client")
         self.assertEqual(config.passkey_oauth_redirect_uris, "")
         self.assertEqual(config.passkey_oauth_code_ttl_seconds, 300)

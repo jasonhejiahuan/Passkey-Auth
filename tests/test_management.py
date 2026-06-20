@@ -132,6 +132,10 @@ class ManagementTest(unittest.TestCase):
         self.assertIn("window.location.hash.slice(1)", body)
         self.assertIn("window.history.pushState", body)
         self.assertIn("window.history.replaceState", body)
+        self.assertIn('data-user-agent="${index}"', body)
+        self.assertIn('openDetail("User-Agent"', body)
+        self.assertIn('data-audit-detail="${index}"', body)
+        self.assertIn('openDetail("审计详情"', body)
 
     def test_management_reauthentication_refreshes_recent_auth_without_logout(self) -> None:
         credential_id = b"credential-id"

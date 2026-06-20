@@ -243,6 +243,18 @@ dialog form > header {
 }
 #editor-content { display: grid; gap: 18px; padding: 20px; }
 .editor-section { display: grid; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.detail-section { padding-bottom: 0; border-bottom: 0; }
+.detail-section pre {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .permission-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .credential-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }

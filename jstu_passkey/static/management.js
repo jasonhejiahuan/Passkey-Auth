@@ -133,7 +133,7 @@ function renderPlatforms() {
 
 function renderLoginHistory() {
   if (!state) return;
-  renderList("#login-history-list", state.loginHistory, (entry) => `
+  renderList("#login-history-list", state.loginHistory, (entry, index) => `
     <article class="data-row">
       <div class="row-primary">
         <strong>${escapeHtml(entry.username_snapshot || "未知用户")}</strong>
@@ -142,14 +142,20 @@ function renderLoginHistory() {
       <span class="badge ${entry.result === "success" ? "is-on" : "is-off"}">${escapeHtml(entry.result)}</span>
       <span>${escapeHtml(entry.client_id || entry.flow)}</span>
       <span>${escapeHtml(entry.ip_address || "—")}</span>
-      <button title="${escapeHtml(entry.user_agent || "")}">User-Agent</button>
+      <button type="button" data-user-agent="${index}">User-Agent</button>
     </article>
   `);
+  document.querySelectorAll("[data-user-agent]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = state.loginHistory[Number(button.dataset.userAgent)];
+      openDetail("User-Agent", entry.user_agent || "未记录 User-Agent");
+    });
+  });
 }
 
 function renderAuditLogs() {
   if (!state) return;
-  renderList("#audit-logs-list", state.auditLogs, (entry) => `
+  renderList("#audit-logs-list", state.auditLogs, (entry, index) => `
     <article class="data-row">
       <div class="row-primary">
         <strong>${escapeHtml(entry.action)}</strong>
@@ -158,9 +164,25 @@ function renderAuditLogs() {
       <span>${escapeHtml(entry.actor_username || "已删除管理员")}</span>
       <span>${escapeHtml(entry.target_type || "—")}</span>
       <span>${escapeHtml(entry.target_id || "—")}</span>
-      <button title="${escapeHtml(entry.details || "{}")}">详情</button>
+      <button type="button" data-audit-detail="${index}">详情</button>
     </article>
   `);
+  document.querySelectorAll("[data-audit-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = state.auditLogs[Number(button.dataset.auditDetail)];
+      openDetail("审计详情", entry.details || "{}");
+    });
+  });
+}
+
+function openDetail(title, value) {
+  editorTitle.textContent = title;
+  editorContent.innerHTML = `
+    <section class="editor-section detail-section">
+      <pre>${escapeHtml(value)}</pre>
+    </section>
+  `;
+  dialog.showModal();
 }
 
 function renderSettings() {

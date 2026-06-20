@@ -192,7 +192,7 @@ Content-Type: application/json
   "user": {
     "sub": "stable-user-handle",
     "id": 1,
-    "username": "laowang",
+    "username": "alice",
     "createdAt": 1780000000
   }
 }

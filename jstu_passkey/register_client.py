@@ -77,7 +77,10 @@ async function registerPasskey() {
     });
 
     const payload = { credential: encodeRegistrationCredential(credential) };
-    await postJson("/api/register/verify", payload);
+    const result = await postJson("/api/register/verify", payload);
+    if (result.action_token) {
+      window.sessionStorage.setItem("passkey-action-token", result.action_token);
+    }
     hideRegisterPanel();
     document.dispatchEvent(new Event("passkey-session-changed"));
   });

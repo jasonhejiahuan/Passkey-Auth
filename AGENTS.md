@@ -33,7 +33,8 @@ Keep these true:
 - `client_secret`, server API tokens, session cookies, access tokens, and raw credentials must not be exposed in browser UI or committed.
 - Registration stays disabled by default.
 - The v2 database is intentionally fresh-start only; do not add legacy schema migrations or old `PASSKEY_OAUTH_DEMO_*` aliases.
-- Management writes require admin session, CSRF, and recent Passkey authentication.
+- Management writes require admin session, CSRF, recent Passkey authentication,
+  and the current rotating action token.
 - Recovery tokens are one-use, hash-only, and must be validated before the server starts.
 - `PASSKEY_ORIGIN` must match the browser origin used for WebAuthn.
 

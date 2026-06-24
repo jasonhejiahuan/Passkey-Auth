@@ -1,5 +1,6 @@
 "use strict";
 
+const ACTION_TOKEN_STORAGE_KEY = "passkey-action-token";
 const root = document.querySelector("[data-oauth-authorize]");
 const logoButton = document.querySelector("#oauth-logo-button");
 const statusOutput = document.querySelector("#oauth-status");
@@ -33,10 +34,16 @@ async function authorizeWithPasskey() {
     const assertion = await navigator.credentials.get({
       publicKey: decodeRequestOptions(publicKey),
     });
-    await postJson("/auth/passkey/verify", {
+    const verification = await postJson("/auth/passkey/verify", {
       credential: encodeAuthenticationCredential(assertion),
       authFlowToken: root.dataset.authFlowToken,
     });
+    if (verification.action_token) {
+      window.sessionStorage.setItem(
+        ACTION_TOKEN_STORAGE_KEY,
+        verification.action_token,
+      );
+    }
     let result;
     if (root.dataset.oauthMode === "challenge") {
       result = await postJson(

@@ -105,6 +105,12 @@ http://localhost:5003/management
 - 登录历史、管理审计、CSV 导出和日志清理
 - 撤销用户会话、停用和删除用户
 
+敏感管理写入除管理员 Session、CSRF 和最近一次 Passkey 验证外，还要求当前
+`X-Action-Token`。该 token 的明文仅在登录或二次 Passkey 验证成功后返回给当前
+浏览器；服务端只保存与用户及当前 Session 绑定的 hash。每次成功写入都会在 JSON
+中返回 `next_action_token`，旧 token 立即失效；缺失或重放旧 token 会要求重新完成
+Passkey 验证。只读 GET 接口不受影响。
+
 CSV 使用 UTF-8 BOM 和稳定英文列名，不包含 credential 公钥、Client Secret
 hash、session 或 token。登录历史包含原始 IP 和完整 User-Agent，应按部署地的隐私要求使用。
 
@@ -165,11 +171,13 @@ HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，
 验证成功后再返回发起页面。旧的通用 `/api/login/options` 和
 `/api/login/verify` 已删除，普通业务页面不能直接调用 WebAuthn 验证接口。
 
-浏览器登录成功后，前端接口只返回：
+浏览器登录或二次验证成功后，前端接口返回登录结果和本次 Session 的 action token：
 
 ```json
-{"ok": true}
+{"ok": true, "mode": "login", "action_token": "..."}
 ```
+
+action token 只用于同源浏览器发起敏感状态变更，不是身份信息或服务端 API token。
 
 如需让你的业务后端确认用户身份，由业务后端调用：
 

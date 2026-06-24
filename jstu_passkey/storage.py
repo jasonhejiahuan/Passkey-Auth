@@ -14,6 +14,7 @@ _OAUTH_CODE_KDF_ALGORITHM = "pbkdf2_sha256"
 _OAUTH_CODE_KDF_ITERATIONS = 120_000
 _OAUTH_CODE_KDF_SALT = b"passkey-auth:oauth-authorization-code:v1"
 _SECRET_KDF_ITERATIONS = 120_000
+_ACTION_TOKEN_SETTING_PREFIX = "session_action_token:"
 _SCHEMA_VERSION = 2
 
 
@@ -1009,6 +1010,56 @@ class PasskeyStore:
                     (key, value, now),
                 )
 
+    def issue_action_token(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        token: str,
+    ) -> None:
+        setting_key = _ACTION_TOKEN_SETTING_PREFIX + session_id
+        setting_value = _action_token_value(user_id, token)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key)
+                DO UPDATE SET setting_value = excluded.setting_value,
+                              updated_at = excluded.updated_at
+                """,
+                (setting_key, setting_value, int(time.time())),
+            )
+
+    def rotate_action_token(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        current_token: str,
+        next_token: str,
+    ) -> bool:
+        setting_key = _ACTION_TOKEN_SETTING_PREFIX + session_id
+        current_value = _action_token_value(user_id, current_token)
+        next_value = _action_token_value(user_id, next_token)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE app_settings
+                SET setting_value = ?, updated_at = ?
+                WHERE setting_key = ? AND setting_value = ?
+                """,
+                (next_value, int(time.time()), setting_key, current_value),
+            )
+        return cursor.rowcount == 1
+
+    def delete_action_token(self, session_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM app_settings WHERE setting_key = ?",
+                (_ACTION_TOKEN_SETTING_PREFIX + session_id,),
+            )
+
     def get_passkey_settings(self) -> PasskeySettings:
         defaults = {
             "passkey_algorithms": "[-7, -8, -257]",
@@ -1616,3 +1667,14 @@ def _verify_secret_hash(secret: str, encoded: str) -> bool:
 
 def _token_digest(token: str) -> str:
     return hashlib.sha256(f"passkey-admin-recovery:v1:{token}".encode()).hexdigest()
+
+
+def _action_token_value(user_id: int, token: str) -> str:
+    digest = hashlib.sha256(
+        f"passkey-action-token:v1:{token}".encode()
+    ).hexdigest()
+    return json.dumps(
+        {"token_hash": digest, "user_id": int(user_id)},
+        separators=(",", ":"),
+        sort_keys=True,
+    )

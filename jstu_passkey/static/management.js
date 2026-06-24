@@ -1,10 +1,12 @@
 "use strict";
 
+const ACTION_TOKEN_STORAGE_KEY = "passkey-action-token";
 const csrfToken = document.querySelector('meta[name="management-csrf-token"]').content;
 const statusOutput = document.querySelector("#management-status");
 const dialog = document.querySelector("#editor-dialog");
 const editorTitle = document.querySelector("#editor-title");
 const editorContent = document.querySelector("#editor-content");
+let actionToken = window.sessionStorage.getItem(ACTION_TOKEN_STORAGE_KEY) || "";
 let state = null;
 let settingsSaveChain = Promise.resolve();
 
@@ -40,6 +42,7 @@ async function logout() {
   button.textContent = "正在退出…";
   try {
     await requestJson("/api/logout", { method: "POST" });
+    window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
     window.location.replace("/");
   } catch (error) {
     button.disabled = false;
@@ -527,13 +530,28 @@ async function mutate(url, options) {
 async function requestJson(url, options = {}) {
   const init = { method: options.method || "GET", headers: {} };
   if (init.method !== "GET") init.headers["X-CSRF-Token"] = csrfToken;
+  if (
+    init.method !== "GET" &&
+    url.startsWith("/api/management/") &&
+    actionToken
+  ) {
+    init.headers["X-Action-Token"] = actionToken;
+  }
   if (options.body !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(options.body);
   }
   const response = await fetch(url, init);
   const data = await response.json();
-  if (response.status === 428 && !options.skipReauth) {
+  if (response.ok && data.next_action_token) {
+    actionToken = data.next_action_token;
+    window.sessionStorage.setItem(ACTION_TOKEN_STORAGE_KEY, actionToken);
+  }
+  if ((response.status === 428 || data.reauth_required) && !options.skipReauth) {
+    if (data.reauth_required) {
+      actionToken = "";
+      window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
+    }
     const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const query = new URLSearchParams({ mode: "reauth", return_to: returnTo });
     window.location.assign(`/auth/passkey?${query}`);

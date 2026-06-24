@@ -328,6 +328,7 @@ async function logout() {
       await hideRegisterPanelWithTransition();
     }
     await postJson(apiPath("logout"), {});
+    window.sessionStorage.removeItem("passkey-action-token");
     authenticatedUser = null;
     setStatus("已退出登录", "success");
   } catch (error) {

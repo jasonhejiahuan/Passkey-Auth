@@ -37,11 +37,19 @@ class ManagementTest(unittest.TestCase):
             {"admin": True, "login": True, "demo": True},
         )
         self.admin = self.store.get_user_by_id(self.admin.id)
+        self.action_token = "current-action-token"
+        self.action_token_session_id = "management-session"
+        self.store.issue_action_token(
+            session_id=self.action_token_session_id,
+            user_id=self.admin.id,
+            token=self.action_token,
+        )
         with self.client.session_transaction() as session:
             session["signed_in_user_id"] = self.admin.id
             session["signed_in_session_version"] = self.admin.session_version
             session["management_reauthenticated_at"] = int(time.time())
             session["management_csrf_token"] = "csrf-token"
+            session["action_token_session_id"] = self.action_token_session_id
 
     def tearDown(self) -> None:
         for key, value in self.previous_env.items():
@@ -50,6 +58,14 @@ class ManagementTest(unittest.TestCase):
             else:
                 os.environ[key] = value
         self.tempdir.cleanup()
+
+    def write_headers(self, action_token: str | None = None) -> dict[str, str]:
+        return {
+            "X-CSRF-Token": "csrf-token",
+            "X-Action-Token": self.action_token
+            if action_token is None
+            else action_token,
+        }
 
     def test_management_requires_admin(self) -> None:
         client = self.app.test_client()
@@ -185,12 +201,80 @@ class ManagementTest(unittest.TestCase):
             )
 
         self.assertEqual(verify_response.status_code, 200)
+        refreshed_action_token = verify_response.get_json()["action_token"]
+        self.assertNotEqual(refreshed_action_token, self.action_token)
         with self.client.session_transaction() as session:
             self.assertEqual(session["signed_in_user_id"], self.admin.id)
+            self.assertEqual(
+                session["action_token_session_id"],
+                self.action_token_session_id,
+            )
             self.assertGreaterEqual(
                 session["management_reauthenticated_at"],
                 int(time.time()) - 2,
             )
+        with self.store.connect() as conn:
+            stored_value = conn.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+                (f"session_action_token:{self.action_token_session_id}",),
+            ).fetchone()[0]
+        self.assertNotIn(refreshed_action_token, stored_value)
+
+    def test_passkey_login_creates_hashed_action_token(self) -> None:
+        credential_id = b"login-credential"
+        self.store.save_credential(
+            user_id=self.admin.id,
+            credential_id=credential_id,
+            public_key=b"public-key",
+            sign_count=0,
+            transports=["internal"],
+            aaguid=None,
+            credential_type="public-key",
+            device_type="single_device",
+            backed_up=False,
+        )
+        client = self.app.test_client()
+        client.get("/auth/passkey")
+        with client.session_transaction() as session:
+            auth_flow_token = session["auth_flow_token"]
+        options_response = client.post(
+            "/auth/passkey/options",
+            json={
+                "username": self.admin.username,
+                "mode": "login",
+                "authFlowToken": auth_flow_token,
+            },
+        )
+        self.assertEqual(options_response.status_code, 200)
+
+        with patch(
+            "jstu_passkey.app.verify_authentication",
+            return_value=SimpleNamespace(
+                credential_id=credential_id,
+                new_sign_count=1,
+                user_handle=None,
+            ),
+        ):
+            verify_response = client.post(
+                "/auth/passkey/verify",
+                json={
+                    "credential": {
+                        "rawId": bytes_to_base64url(credential_id),
+                    },
+                    "authFlowToken": auth_flow_token,
+                },
+            )
+
+        self.assertEqual(verify_response.status_code, 200)
+        action_token = verify_response.get_json()["action_token"]
+        with client.session_transaction() as session:
+            action_token_session_id = session["action_token_session_id"]
+        with self.store.connect() as conn:
+            stored_value = conn.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+                (f"session_action_token:{action_token_session_id}",),
+            ).fetchone()[0]
+        self.assertNotIn(action_token, stored_value)
 
     def test_management_reauthentication_rejects_another_users_passkey(self) -> None:
         other = self.store.create_user("other", b"o" * 32)
@@ -227,9 +311,66 @@ class ManagementTest(unittest.TestCase):
         response = self.client.patch(
             f"/api/management/users/{self.admin.id}",
             json={"permissions": {"admin": False, "login": True, "demo": True}},
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
         self.assertEqual(response.status_code, 409)
+
+    def test_sensitive_write_rotates_token_and_rejects_replay(self) -> None:
+        response = self.client.patch(
+            "/api/management/settings/registration",
+            json={
+                "mode": "open",
+                "enabledUntil": None,
+                "defaultDemoAllowed": True,
+            },
+            headers=self.write_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        next_action_token = response.get_json()["next_action_token"]
+        self.assertNotEqual(next_action_token, self.action_token)
+        self.assertEqual(self.store.get_registration_settings().mode, "open")
+
+        replay_response = self.client.patch(
+            "/api/management/settings/registration",
+            json={
+                "mode": "closed",
+                "enabledUntil": None,
+                "defaultDemoAllowed": True,
+            },
+            headers=self.write_headers(),
+        )
+
+        self.assertEqual(replay_response.status_code, 409)
+        self.assertEqual(
+            replay_response.get_json()["reason"],
+            "action_token_mismatch",
+        )
+        self.assertTrue(replay_response.get_json()["reauth_required"])
+        self.assertEqual(self.store.get_registration_settings().mode, "open")
+
+    def test_sensitive_write_without_action_token_requires_reauth(self) -> None:
+        response = self.client.patch(
+            "/api/management/settings/registration",
+            json={
+                "mode": "open",
+                "enabledUntil": None,
+                "defaultDemoAllowed": True,
+            },
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["reason"], "action_token_missing")
+        self.assertTrue(response.get_json()["reauth_required"])
+        self.assertEqual(self.store.get_registration_settings().mode, "closed")
+
+    def test_read_only_management_endpoint_does_not_require_action_token(self) -> None:
+        response = self.client.get("/api/management/overview")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+        self.assertNotIn("next_action_token", response.get_json())
 
     def test_other_admin_can_be_removed_when_an_admin_remains(self) -> None:
         other = self.store.create_user("operator", b"b" * 32)
@@ -239,7 +380,7 @@ class ManagementTest(unittest.TestCase):
         )
         response = self.client.delete(
             f"/api/management/users/{other.id}",
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(self.store.get_user_by_id(other.id))
@@ -261,7 +402,7 @@ class ManagementTest(unittest.TestCase):
                 "enabledUntil": enabled_until,
                 "defaultDemoAllowed": False,
             },
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
         self.assertEqual(response.status_code, 200)
         settings = self.store.get_registration_settings()
@@ -281,7 +422,7 @@ class ManagementTest(unittest.TestCase):
                 "excludeCredentials": False,
                 "hints": ["client-device"],
             },
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
 
         self.assertEqual(response.status_code, 200)
@@ -313,7 +454,7 @@ class ManagementTest(unittest.TestCase):
                 "excludeCredentials": True,
                 "hints": [],
             },
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
 
         self.assertEqual(response.status_code, 400)
@@ -327,7 +468,7 @@ class ManagementTest(unittest.TestCase):
                 "name": "Analysis Agent",
                 "redirectUris": "https://agent.example/callback",
             },
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
         self.assertEqual(response.status_code, 200)
         secret = response.get_json()["clientSecret"]
@@ -356,7 +497,7 @@ class ManagementTest(unittest.TestCase):
         response = self.client.post(
             "/api/management/logs/login/clear",
             json={},
-            headers={"X-CSRF-Token": "csrf-token"},
+            headers=self.write_headers(),
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["deleted"], 1)

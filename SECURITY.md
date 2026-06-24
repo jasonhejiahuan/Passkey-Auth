@@ -31,12 +31,21 @@ access tokens, recovery tokens, or personal information in any report.
 
 ## Reporting a Vulnerability
 
-Please do not open a public GitHub issue, discussion, or pull request containing
-details of a suspected vulnerability.
+Public GitHub issues are welcome for security observations, hardening ideas,
+design questions, and findings that do not expose sensitive data or provide an
+immediately usable exploit. Open discussion can help contributors compare
+approaches, improve the security model, and develop fixes together.
 
 Use this repository's
 [private vulnerability reporting](https://github.com/jasonhejiahuan/Passkey-Auth/security/advisories/new)
-channel:
+channel when a report includes:
+
+- A working exploit against a supported version.
+- Authentication bypass or unauthorized access with meaningful impact.
+- Credentials, tokens, personal data, or details from a real deployment.
+- Information that would place users at avoidable risk if published before a fix.
+
+To submit a private report:
 
 1. Open the repository's **Security** page.
 2. Select **Advisories**.
@@ -46,6 +55,10 @@ channel:
 
 The report and subsequent discussion will remain private to the reporter and the
 repository's security collaborators until disclosure is coordinated.
+
+If you are unsure which channel to use, start with a private report. The
+maintainers and reporter can later move the discussion into a public issue when
+the sensitive details have been addressed.
 
 ## What to Include
 

@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
+from flask import Blueprint, Response, current_app, g, jsonify, render_template, request, session
 from webauthn.helpers import bytes_to_base64url
 
 from .storage import PasskeyStore, User
@@ -16,6 +16,26 @@ from .webauthn_service import normalize_username
 
 def create_management_blueprint() -> Blueprint:
     blueprint = Blueprint("management", __name__)
+
+    @blueprint.after_request
+    def finalize_action_token(response):
+        next_token = getattr(g, "next_action_token", "")
+        if not next_token:
+            return response
+
+        payload = response.get_json(silent=True)
+        if 200 <= response.status_code < 300 and isinstance(payload, dict):
+            payload["next_action_token"] = next_token
+            response.set_data(current_app.json.dumps(payload))
+            return response
+
+        _store().rotate_action_token(
+            session_id=g.action_token_session_id,
+            user_id=g.action_token_user_id,
+            current_token=next_token,
+            next_token=g.previous_action_token,
+        )
+        return response
 
     @blueprint.get("/management")
     def management_page():
@@ -404,6 +424,22 @@ def _require_write():
     reauthenticated_at = int(session.get("management_reauthenticated_at") or 0)
     if reauthenticated_at < int(time.time()) - 300:
         return _error("请重新完成 Passkey 登录后再执行此操作", 428)
+    session_id = str(session.get("action_token_session_id") or "")
+    provided = request.headers.get("X-Action-Token", "")
+    if not session_id or not provided:
+        return _action_token_error("action_token_missing")
+    next_token = secrets.token_urlsafe(32)
+    if not _store().rotate_action_token(
+        session_id=session_id,
+        user_id=user.id,
+        current_token=provided,
+        next_token=next_token,
+    ):
+        return _action_token_error("action_token_mismatch")
+    g.action_token_session_id = session_id
+    g.action_token_user_id = user.id
+    g.previous_action_token = provided
+    g.next_action_token = next_token
     return user
 
 
@@ -549,6 +585,22 @@ def _iso(value) -> str:
 
 def _error(message: str, status: int):
     return _no_store((jsonify({"ok": False, "error": message}), status))
+
+
+def _action_token_error(reason: str):
+    return _no_store(
+        (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "操作令牌无效，请重新完成 Passkey 验证",
+                    "reauth_required": True,
+                    "reason": reason,
+                }
+            ),
+            409,
+        )
+    )
 
 
 def _management_error_page(message: str, status: int):

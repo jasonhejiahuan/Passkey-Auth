@@ -734,7 +734,8 @@ def create_app() -> Flask:
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
         session["management_reauthenticated_at"] = int(time.time())
-        return _no_store(jsonify({"ok": True}))
+        action_token = _issue_action_token(store, user, reuse_session=False)
+        return _no_store(jsonify({"ok": True, "action_token": action_token}))
 
     @app.post("/auth/passkey/options")
     def passkey_auth_options():
@@ -876,6 +877,11 @@ def create_app() -> Flask:
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
         session["management_reauthenticated_at"] = int(time.time())
+        action_token = _issue_action_token(
+            store,
+            user,
+            reuse_session=mode == "reauth",
+        )
         store.record_login(
             user=user,
             client_id=None,
@@ -886,10 +892,19 @@ def create_app() -> Flask:
             user_agent=request.headers.get("User-Agent", ""),
             sub=bytes_to_base64url(user.user_handle),
         )
-        return jsonify({"ok": True, "mode": mode or "login"})
+        return jsonify(
+            {
+                "ok": True,
+                "mode": mode or "login",
+                "action_token": action_token,
+            }
+        )
 
     @app.post("/api/logout")
     def logout():
+        action_token_session_id = session.get("action_token_session_id")
+        if action_token_session_id:
+            store.delete_action_token(str(action_token_session_id))
         session.clear()
         return jsonify({"ok": True})
 
@@ -976,7 +991,16 @@ def create_app() -> Flask:
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
         session["management_reauthenticated_at"] = int(time.time())
-        return _no_store(jsonify({"ok": True, "redirectUrl": "/management"}))
+        action_token = _issue_action_token(store, user, reuse_session=False)
+        return _no_store(
+            jsonify(
+                {
+                    "ok": True,
+                    "redirectUrl": "/management",
+                    "action_token": action_token,
+                }
+            )
+        )
 
     @app.errorhandler(ValueError)
     def value_error(error: ValueError):
@@ -1040,6 +1064,28 @@ def _valid_auth_flow_token(value: object) -> bool:
         and isinstance(value, str)
         and secrets.compare_digest(str(expected), value)
     )
+
+
+def _issue_action_token(
+    store: PasskeyStore,
+    user: User,
+    *,
+    reuse_session: bool,
+) -> str:
+    previous_session_id = str(session.get("action_token_session_id") or "")
+    session_id = previous_session_id if reuse_session else ""
+    if not session_id:
+        session_id = secrets.token_urlsafe(24)
+    if previous_session_id and previous_session_id != session_id:
+        store.delete_action_token(previous_session_id)
+    token = secrets.token_urlsafe(32)
+    store.issue_action_token(
+        session_id=session_id,
+        user_id=user.id,
+        token=token,
+    )
+    session["action_token_session_id"] = session_id
+    return token
 
 
 def _configure_proxy_support(app: Flask) -> None:

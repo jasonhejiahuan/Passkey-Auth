@@ -1,5 +1,6 @@
 "use strict";
 
+const ACTION_TOKEN_STORAGE_KEY = "passkey-action-token";
 const script = document.currentScript;
 const token = script?.dataset.recoveryToken || "";
 const form = document.querySelector("#recovery-form");
@@ -27,6 +28,9 @@ async function registerAdministrator(event) {
     const result = await postJson(`/${token}/verify`, {
       credential: encodeRegistrationCredential(credential),
     });
+    if (result.action_token) {
+      window.sessionStorage.setItem(ACTION_TOKEN_STORAGE_KEY, result.action_token);
+    }
     setStatus("管理员已创建", "success");
     window.location.replace(result.redirectUrl || "/management");
   } catch (error) {

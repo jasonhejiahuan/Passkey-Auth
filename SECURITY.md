@@ -12,22 +12,21 @@ discussion. Maintainer capacity is limited, so investigation and remediation are
 handled on a best-effort basis. Reports that include clear reproduction steps,
 impact analysis, and a practical remediation direction are especially helpful.
 
-There is currently no paid bug bounty program.
+There is currently no formal bug bounty program.
 
-## Supported Versions
+## Project Versions
 
-Security fixes are developed against the current default branch and, when
-practical, included in the next tagged release.
+Passkey-Auth evolves quickly as a research and learning project. Releases,
+development snapshots, and the default branch may differ substantially over
+time, and the project does not maintain a fixed version-support schedule.
 
-| Version | Supported |
-| --- | --- |
-| Current `main` branch | Yes |
-| Latest tagged release | Best effort |
-| Older releases and development snapshots | No |
+When reporting an issue, identify the tested commit, tag, or release and note
+whether the behavior is also present in the current code when practical. This
+helps maintainers understand the relevant implementation without implying a
+long-term maintenance commitment for a particular version.
 
-Before reporting an issue, please verify whether it is reproducible on the current
-`main` branch. Do not disclose secrets, credentials, private keys, session data,
-access tokens, recovery tokens, or personal information in any report.
+Do not disclose secrets, credentials, private keys, session data, access tokens,
+recovery tokens, or personal information in any report.
 
 ## Reporting a Vulnerability
 
@@ -40,7 +39,7 @@ Use this repository's
 [private vulnerability reporting](https://github.com/jasonhejiahuan/Passkey-Auth/security/advisories/new)
 channel when a report includes:
 
-- A working exploit against a supported version.
+- A working exploit with meaningful impact on the project.
 - Authentication bypass or unauthorized access with meaningful impact.
 - Credentials, tokens, personal data, or details from a real deployment.
 - Information that would place users at avoidable risk if published before a fix.
@@ -115,5 +114,5 @@ reasonable time for investigation before publishing details. If circumstances
 require earlier disclosure, discuss the proposed timeline in the private report.
 
 The maintainers may publish a GitHub Security Advisory and may request a CVE when
-the issue materially affects users of a supported version. Credit will be offered
-when desired, but may be omitted at the reporter's request.
+the issue has meaningful impact on users or the wider ecosystem. Credit will be
+offered when desired, but may be omitted at the reporter's request.

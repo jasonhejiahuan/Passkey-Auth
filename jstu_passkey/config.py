@@ -99,6 +99,9 @@ class AppConfig:
     # 是否发送低敏的 Server-Timing 总耗时，便于浏览器 DevTools 调试。
     passkey_server_timing_enabled: bool = True
 
+    # 独立遥测 SQLite 数据库；与认证主库分离，关闭遥测时不会打开。
+    passkey_telemetry_database: str = ""
+
     # Jason Telemetry v12 随机浏览器采集口令创建 URL；为空时不注入采集脚本。
     passkey_telemetry_token_url: str = ""
 
@@ -110,7 +113,12 @@ class AppConfig:
 
     @classmethod
     def from_env(cls, *, instance_path: str | Path) -> AppConfig:
-        defaults = cls(passkey_database=str(Path(instance_path) / "passkeys-v2.sqlite3"))
+        defaults = cls(
+            passkey_database=str(Path(instance_path) / "passkeys-v2.sqlite3"),
+            passkey_telemetry_database=str(
+                Path(instance_path) / "passkeys-telemetry-v1.sqlite3"
+            ),
+        )
         passkey_origin = _env_optional_str("PASSKEY_ORIGIN")
         secure_cookies_default = _origin_is_https(passkey_origin)
         return cls(
@@ -210,6 +218,10 @@ class AppConfig:
                 "PASSKEY_SERVER_TIMING_ENABLED",
                 default=defaults.passkey_server_timing_enabled,
             ),
+            passkey_telemetry_database=_env_str(
+                "PASSKEY_TELEMETRY_DATABASE",
+                defaults.passkey_telemetry_database,
+            ),
             passkey_telemetry_token_url=_env_str(
                 "PASSKEY_TELEMETRY_TOKEN_URL",
                 defaults.passkey_telemetry_token_url,
@@ -258,6 +270,7 @@ class AppConfig:
             "SESSION_COOKIE_SAMESITE": "Lax",
             "SESSION_COOKIE_SECURE": self.passkey_secure_cookies,
             "PASSKEY_SERVER_TIMING_ENABLED": self.passkey_server_timing_enabled,
+            "PASSKEY_TELEMETRY_DATABASE": self.passkey_telemetry_database,
             "PASSKEY_TELEMETRY_TOKEN_URL": self.passkey_telemetry_token_url,
             "PASSKEY_TELEMETRY_API_KEY": self.passkey_telemetry_api_key,
             "PASSKEY_TELEMETRY_TIMEOUT_SECONDS": (

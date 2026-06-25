@@ -14,6 +14,7 @@ class DesktopLauncherTest(unittest.TestCase):
     def setUp(self) -> None:
         self.keys = (
             "PASSKEY_DATABASE",
+            "PASSKEY_TELEMETRY_DATABASE",
             "FLASK_SECRET_KEY",
             "PASSKEY_ORIGIN",
             "HOST",
@@ -43,6 +44,10 @@ class DesktopLauncherTest(unittest.TestCase):
         self.assertEqual(
             os.environ["PASSKEY_DATABASE"],
             str(data_dir / "passkeys-v2.sqlite3"),
+        )
+        self.assertEqual(
+            os.environ["PASSKEY_TELEMETRY_DATABASE"],
+            str(data_dir / "passkeys-telemetry-v1.sqlite3"),
         )
         self.assertEqual(os.environ["FLASK_SECRET_KEY"], first_secret)
         self.assertEqual(os.environ["PASSKEY_ORIGIN"], "http://localhost:5003")

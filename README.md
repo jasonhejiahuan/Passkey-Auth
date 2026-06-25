@@ -16,6 +16,7 @@
 - 使用标准 WebAuthn 浏览器接口：`navigator.credentials.create()` / `navigator.credentials.get()`
 - 后端 passkey 逻辑位于可导入库函数中
 - SQLite 本地存储用户和 credential public key
+- 可选浏览器遥测：全局性能短路、按用户能力下发、独立统计库和 Management 可视化
 - 支持 Chrome、Safari、Firefox、Edge 等现代浏览器
 
 ## AI 协作声明
@@ -61,6 +62,9 @@ GitHub Release。
 - macOS：`~/Library/Application Support/Passkey-Auth`
 - Linux：`${XDG_DATA_HOME:-~/.local/share}/Passkey-Auth`
 
+认证主库、可选遥测库和固定 Secret 都保存在该目录；遥测库仍只会在启用遥测或
+管理员读取统计时创建。
+
 构建产物未进行 Apple Developer ID 或 Windows Authenticode 签名，因此首次启动时
 可能出现 Gatekeeper 或 SmartScreen 提示。正式公开分发时建议增加平台代码签名。
 
@@ -103,6 +107,7 @@ http://localhost:5003/management
 - OAuth Client 平台、回调地址、启停和 secret 轮换
 - 注册永久开启、关闭或自定义期限临时开启
 - 登录历史、管理审计、CSV 导出和日志清理
+- 遥测总开关、逐用户采集策略、设备分布统计、CSV 导出和独立数据清理
 - 撤销用户会话、停用和删除用户
 
 敏感管理写入除管理员 Session、CSRF 和最近一次 Passkey 验证外，还要求当前
@@ -113,6 +118,14 @@ Passkey 验证。只读 GET 接口不受影响。
 
 CSV 使用 UTF-8 BOM 和稳定英文列名，不包含 credential 公钥、Client Secret
 hash、session 或 token。登录历史包含原始 IP 和完整 User-Agent，应按部署地的隐私要求使用。
+
+遥测默认关闭。总开关关闭时，请求热路径只进行一次内存布尔检查，不打开遥测
+数据库、不修改 HTML、不加载浏览器采集脚本，也不创建网络任务。默认使用内置
+Telemetry；也可切换到 jason-telemetry 或任意 HTTP POST 接收端，并选择浏览器直连
+或 Passkey-Auth 服务端异步转发。启用后可以针对
+匿名访客和每个已登录用户分别选择屏幕、硬件摘要、显示偏好、网络、字体和电池
+能力；浏览器在空闲时使用同源 beacon 上报，并按操作系统动态加载匹配模块。完整
+设计、隐私边界和浏览器兼容说明见 [遥测文档](docs/telemetry.md)。
 
 完整 OAuth 接入说明见：[OAuth 接入开发文档](docs/oauth-integration.md)。
 
@@ -141,6 +154,7 @@ PASSKEY_RP_ID=localhost
 PASSKEY_ORIGIN=http://localhost:5000
 PASSKEY_RP_NAME="JSTU Passkey"
 PASSKEY_DATABASE=/path/to/passkeys-v2.sqlite3
+PASSKEY_TELEMETRY_DATABASE=/path/to/passkeys-telemetry-v1.sqlite3
 FLASK_SECRET_KEY=change-me
 PASSKEY_REGISTRATION_ENABLED=false
 PASSKEY_HOME_AUTH_ENABLED=true
@@ -164,6 +178,16 @@ PASSKEY_SERVER_TIMING_ENABLED=true
 HTTP/3/QUIC 通常由 Caddy、NGINX、Cloudflare 等 HTTPS 反向代理终止，Flask 开发服务器本身不提供 HTTP/3。线上部署时设置 `PASSKEY_ORIGIN=https://auth.xxxxx`；如果代理会传递可信 `X-Forwarded-*` 头，再开启 `PASSKEY_TRUST_PROXY_HEADERS=true`。确认代理已经支持 HTTP/3 后，可设置 `PASSKEY_HTTP3_ALT_SVC='h3=":443"; ma=86400'` 让 HTTPS 响应宣告 HTTP/3 替代服务。
 
 `PASSKEY_SERVER_TIMING_ENABLED` 默认开启，会发送低敏的 `Server-Timing: app;dur=...`，方便在 Chrome DevTools 的 Network 面板里查看 Flask 应用处理总耗时；不包含 WebAuthn、OAuth、用户或 token 内部细节。
+
+`PASSKEY_TELEMETRY_DATABASE` 默认使用
+`instance/passkeys-telemetry-v1.sqlite3`。该库与认证主库分离，只有管理员打开
+遥测面板读取历史统计，或内置模式收到样本时才会打开。外部模式不会为了本地图表
+重复落盘，且只有被选中的适配器会按需加载。jason-telemetry v13 可通过一次性
+配对码与 Passkey-Auth 自动协商并保存专用 API Key，无需在浏览器或 Management
+响应中显示最终密钥。旧的
+`PASSKEY_TELEMETRY_TOKEN_URL` / `PASSKEY_TELEMETRY_API_KEY` 仍保留兼容端点，并在
+尚未保存 Management 设置时作为旧部署的初始启用信号；新功能不需要把 API key
+发送给浏览器。
 
 ## 服务端验证 API
 

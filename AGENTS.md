@@ -16,6 +16,12 @@ Read the project Wiki before broad changes:
 - `jstu_passkey/app.py`: Flask routes, OAuth flow, link challenge flow, session verify API.
 - `jstu_passkey/config.py`: default config values and environment overrides.
 - `jstu_passkey/storage.py`: SQLite users, credentials, OAuth codes, challenge requests.
+- `jstu_passkey/telemetry.py`: cached telemetry policy gate, signed collection tokens,
+  lazy backend selection, isolated SQLite events, retention, statistics, and CSV export.
+- `jstu_passkey/telemetry_delivery.py`: bounded asynchronous external-delivery queue.
+- `jstu_passkey/telemetry_backends/`: lazy-loaded jason-telemetry and custom HTTP adapters.
+- `integrations/jason-telemetry/telemetry_server_v13_both.py`: optional v13 server
+  with automatic Passkey-Auth API-key pairing while preserving v12 data APIs.
 - `jstu_passkey/management.py`: `/management` UI APIs, permissions, CSV export, and log cleanup.
 - `jstu_passkey/webauthn_service.py`: WebAuthn option generation and verification.
 - `jstu_passkey/static/`: browser passkey flows and UI behavior.
@@ -37,6 +43,14 @@ Keep these true:
   and the current rotating action token.
 - Recovery tokens are one-use, hash-only, and must be validated before the server starts.
 - `PASSKEY_ORIGIN` must match the browser origin used for WebAuthn.
+- Telemetry collection tokens are short-lived, policy-bound, one-use, and never
+  identity or authorization proof.
+- The telemetry master switch must stay a true hot-path short circuit: when off,
+  do not open the telemetry database, rewrite HTML, load telemetry JS, or create
+  browser network work.
+- External telemetry API keys and private headers stay server-side. Direct browser
+  delivery may use only a short-lived external target or explicitly public headers.
+- Unselected telemetry backend modules must not be imported or initialized.
 
 ## Development Loop
 

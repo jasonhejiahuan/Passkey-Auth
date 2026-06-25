@@ -6,16 +6,31 @@ import time
 import hashlib
 import hmac
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlsplit
 
 _OAUTH_CODE_KDF_ALGORITHM = "pbkdf2_sha256"
 _OAUTH_CODE_KDF_ITERATIONS = 120_000
 _OAUTH_CODE_KDF_SALT = b"passkey-auth:oauth-authorization-code:v1"
 _SECRET_KDF_ITERATIONS = 120_000
 _ACTION_TOKEN_SETTING_PREFIX = "session_action_token:"
+_TELEMETRY_CONFIG_SETTING = "telemetry_config"
+_TELEMETRY_USER_POLICY_PREFIX = "telemetry_user_policy:"
 _SCHEMA_VERSION = 2
+TELEMETRY_FEATURES = (
+    "screen",
+    "hardware",
+    "fonts",
+    "battery",
+    "network",
+    "preferences",
+)
+TELEMETRY_BACKENDS = ("builtin", "jason", "custom")
+TELEMETRY_AUTH_MODES = ("none", "bearer", "header")
+TELEMETRY_DELIVERY_MODES = ("relay", "direct")
+TELEMETRY_DIRECT_CONTENT_TYPES = ("text/plain", "application/json")
 
 
 @dataclass(frozen=True)
@@ -98,6 +113,34 @@ class PasskeySettings:
     attestation: str
     exclude_credentials: bool
     hints: list[str]
+
+
+@dataclass(frozen=True)
+class TelemetrySettings:
+    enabled: bool
+    anonymous_enabled: bool
+    default_features: list[str]
+    retention_days: int
+    backend: str
+    delivery_mode: str
+    jason_base_url: str
+    jason_api_key: str = field(repr=False)
+    custom_url: str
+    custom_auth_mode: str
+    custom_auth_header: str
+    custom_secret: str = field(repr=False)
+    custom_headers: dict[str, str]
+    custom_direct_content_type: str
+    timeout_seconds: float
+    updated_at: int
+
+
+@dataclass(frozen=True)
+class UserTelemetryPolicy:
+    user_id: int
+    mode: str
+    features: list[str]
+    updated_at: int
 
 
 class PasskeyStore:
@@ -380,6 +423,10 @@ class PasskeyStore:
     def delete_user(self, user_id: int) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.execute(
+                "DELETE FROM app_settings WHERE setting_key = ?",
+                (_TELEMETRY_USER_POLICY_PREFIX + str(user_id),),
+            )
 
     def delete_credential(self, credential_row_id: int, user_id: int) -> bool:
         with self.connect() as conn:
@@ -1010,6 +1057,268 @@ class PasskeyStore:
                     (key, value, now),
                 )
 
+    def get_telemetry_settings(
+        self,
+        *,
+        default_enabled: bool = False,
+    ) -> TelemetrySettings:
+        default_features = ["screen", "hardware", "preferences"]
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT setting_value, updated_at
+                FROM app_settings WHERE setting_key = ?
+                """,
+                (_TELEMETRY_CONFIG_SETTING,),
+            ).fetchone()
+        value = _json_object(row["setting_value"] if row else "")
+        features = _telemetry_features(value.get("defaultFeatures"), default_features)
+        retention_days = _bounded_int(value.get("retentionDays"), 30, 1, 365)
+        backend = _telemetry_backend(value.get("backend"))
+        delivery_mode = _telemetry_delivery_mode(value.get("deliveryMode"))
+        custom_auth_mode = _telemetry_auth_mode(value.get("customAuthMode"))
+        return TelemetrySettings(
+            enabled=bool(value.get("enabled", default_enabled)),
+            anonymous_enabled=bool(value.get("anonymousEnabled", False)),
+            default_features=features,
+            retention_days=retention_days,
+            backend=backend,
+            delivery_mode=delivery_mode,
+            jason_base_url=_telemetry_url(
+                value.get("jasonBaseUrl"),
+                field_name="Jason Telemetry 地址",
+                required=False,
+            ),
+            jason_api_key=_telemetry_secret(value.get("jasonApiKey")),
+            custom_url=_telemetry_url(
+                value.get("customUrl"),
+                field_name="自定义 Telemetry 地址",
+                required=False,
+            ),
+            custom_auth_mode=custom_auth_mode,
+            custom_auth_header=_telemetry_header_name(
+                value.get("customAuthHeader"),
+                default="X-Api-Key",
+            ),
+            custom_secret=_telemetry_secret(value.get("customSecret")),
+            custom_headers=_telemetry_headers(value.get("customHeaders")),
+            custom_direct_content_type=_telemetry_direct_content_type(
+                value.get("customDirectContentType")
+            ),
+            timeout_seconds=_bounded_float(
+                value.get("timeoutSeconds"),
+                1.0,
+                0.2,
+                5.0,
+            ),
+            updated_at=int(row["updated_at"]) if row else 0,
+        )
+
+    def set_telemetry_settings(
+        self,
+        *,
+        enabled: bool,
+        anonymous_enabled: bool,
+        default_features: list[str],
+        retention_days: int,
+        backend: str = "builtin",
+        delivery_mode: str = "relay",
+        jason_base_url: str = "",
+        jason_api_key: str = "",
+        custom_url: str = "",
+        custom_auth_mode: str = "none",
+        custom_auth_header: str = "X-Api-Key",
+        custom_secret: str = "",
+        custom_headers: dict[str, str] | None = None,
+        custom_direct_content_type: str = "text/plain",
+        timeout_seconds: float = 1.0,
+    ) -> TelemetrySettings:
+        features = _telemetry_features(default_features)
+        if enabled and not features:
+            raise ValueError("启用遥测时至少选择一种采集能力")
+        retention_days = _bounded_int(retention_days, 30, 1, 365)
+        backend = _telemetry_backend(backend)
+        delivery_mode = _telemetry_delivery_mode(delivery_mode)
+        jason_base_url = _telemetry_url(
+            jason_base_url,
+            field_name="Jason Telemetry 地址",
+            required=False,
+        )
+        jason_api_key = _telemetry_secret(jason_api_key)
+        custom_url = _telemetry_url(
+            custom_url,
+            field_name="自定义 Telemetry 地址",
+            required=False,
+        )
+        custom_auth_mode = _telemetry_auth_mode(custom_auth_mode)
+        custom_auth_header = _telemetry_header_name(
+            custom_auth_header,
+            default="X-Api-Key",
+        )
+        custom_secret = _telemetry_secret(custom_secret)
+        custom_headers = _telemetry_headers(custom_headers)
+        custom_direct_content_type = _telemetry_direct_content_type(
+            custom_direct_content_type
+        )
+        timeout_seconds = _bounded_float(timeout_seconds, 1.0, 0.2, 5.0)
+        if backend == "builtin" and delivery_mode != "relay":
+            raise ValueError("内置 Telemetry 只能由 Passkey-Auth 服务端接收")
+        if enabled and backend == "jason" and (
+            not jason_base_url or not jason_api_key
+        ):
+            raise ValueError("启用 Jason Telemetry 时必须配置服务地址和 API Key")
+        if enabled and backend == "custom" and not custom_url:
+            raise ValueError("启用自定义 Telemetry 时必须配置 POST 地址")
+        if (
+            enabled
+            and backend == "custom"
+            and custom_auth_mode != "none"
+            and not custom_secret
+        ):
+            raise ValueError("所选自定义认证方式需要配置密钥")
+        if (
+            enabled
+            and backend == "custom"
+            and delivery_mode == "direct"
+            and custom_auth_mode != "none"
+        ):
+            raise ValueError("浏览器直连不能使用服务端保存的私有认证密钥")
+        if (
+            enabled
+            and backend == "custom"
+            and delivery_mode == "direct"
+            and any(_sensitive_header_name(name) for name in custom_headers)
+        ):
+            raise ValueError("浏览器直连 Headers 不能包含密钥、令牌或 Cookie")
+        now = int(time.time())
+        value = json.dumps(
+            {
+                "enabled": bool(enabled),
+                "anonymousEnabled": bool(anonymous_enabled),
+                "defaultFeatures": features,
+                "retentionDays": retention_days,
+                "backend": backend,
+                "deliveryMode": delivery_mode,
+                "jasonBaseUrl": jason_base_url,
+                "jasonApiKey": jason_api_key,
+                "customUrl": custom_url,
+                "customAuthMode": custom_auth_mode,
+                "customAuthHeader": custom_auth_header,
+                "customSecret": custom_secret,
+                "customHeaders": custom_headers,
+                "customDirectContentType": custom_direct_content_type,
+                "timeoutSeconds": timeout_seconds,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key)
+                DO UPDATE SET setting_value = excluded.setting_value,
+                              updated_at = excluded.updated_at
+                """,
+                (_TELEMETRY_CONFIG_SETTING, value, now),
+            )
+        return TelemetrySettings(
+            enabled=bool(enabled),
+            anonymous_enabled=bool(anonymous_enabled),
+            default_features=features,
+            retention_days=retention_days,
+            backend=backend,
+            delivery_mode=delivery_mode,
+            jason_base_url=jason_base_url,
+            jason_api_key=jason_api_key,
+            custom_url=custom_url,
+            custom_auth_mode=custom_auth_mode,
+            custom_auth_header=custom_auth_header,
+            custom_secret=custom_secret,
+            custom_headers=custom_headers,
+            custom_direct_content_type=custom_direct_content_type,
+            timeout_seconds=timeout_seconds,
+            updated_at=now,
+        )
+
+    def list_user_telemetry_policies(self) -> dict[int, UserTelemetryPolicy]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT setting_key, setting_value, updated_at
+                FROM app_settings
+                WHERE setting_key LIKE ?
+                """,
+                (_TELEMETRY_USER_POLICY_PREFIX + "%",),
+            ).fetchall()
+        policies: dict[int, UserTelemetryPolicy] = {}
+        for row in rows:
+            suffix = str(row["setting_key"])[len(_TELEMETRY_USER_POLICY_PREFIX) :]
+            try:
+                user_id = int(suffix)
+            except ValueError:
+                continue
+            value = _json_object(row["setting_value"])
+            mode = str(value.get("mode") or "inherit")
+            if mode not in {"inherit", "off", "custom"}:
+                continue
+            policies[user_id] = UserTelemetryPolicy(
+                user_id=user_id,
+                mode=mode,
+                features=_telemetry_features(value.get("features")),
+                updated_at=int(row["updated_at"]),
+            )
+        return policies
+
+    def set_user_telemetry_policy(
+        self,
+        *,
+        user_id: int,
+        mode: str,
+        features: list[str],
+    ) -> UserTelemetryPolicy:
+        if not self.get_user_by_id(user_id):
+            raise ValueError("用户不存在")
+        if mode not in {"inherit", "off", "custom"}:
+            raise ValueError("无效的用户遥测策略")
+        normalized_features = _telemetry_features(features)
+        if mode == "custom" and not normalized_features:
+            raise ValueError("自定义策略至少选择一种采集能力")
+        now = int(time.time())
+        setting_key = _TELEMETRY_USER_POLICY_PREFIX + str(user_id)
+        with self.connect() as conn:
+            if mode == "inherit":
+                conn.execute(
+                    "DELETE FROM app_settings WHERE setting_key = ?",
+                    (setting_key,),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(setting_key)
+                    DO UPDATE SET setting_value = excluded.setting_value,
+                                  updated_at = excluded.updated_at
+                    """,
+                    (
+                        setting_key,
+                        json.dumps(
+                            {"mode": mode, "features": normalized_features},
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        now,
+                    ),
+                )
+        return UserTelemetryPolicy(
+            user_id=user_id,
+            mode=mode,
+            features=normalized_features,
+            updated_at=now,
+        )
+
     def issue_action_token(
         self,
         *,
@@ -1549,6 +1858,136 @@ class PasskeyStore:
                 params,
             ).fetchone()
         return int(row["count"])
+
+
+def _json_object(value) -> dict:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _telemetry_features(value, default: list[str] | None = None) -> list[str]:
+    if value is None:
+        return list(default or [])
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("遥测能力必须是列表")
+    allowed = set(TELEMETRY_FEATURES)
+    features = list(dict.fromkeys(str(item) for item in value))
+    if any(feature not in allowed for feature in features):
+        raise ValueError("包含不受支持的遥测能力")
+    return [feature for feature in TELEMETRY_FEATURES if feature in features]
+
+
+def _telemetry_backend(value) -> str:
+    backend = str(value or "builtin").strip().lower()
+    if backend not in TELEMETRY_BACKENDS:
+        raise ValueError("不受支持的遥测后端")
+    return backend
+
+
+def _telemetry_auth_mode(value) -> str:
+    mode = str(value or "none").strip().lower()
+    if mode not in TELEMETRY_AUTH_MODES:
+        raise ValueError("不受支持的自定义认证方式")
+    return mode
+
+
+def _telemetry_delivery_mode(value) -> str:
+    mode = str(value or "relay").strip().lower()
+    if mode not in TELEMETRY_DELIVERY_MODES:
+        raise ValueError("不受支持的遥测发送路径")
+    return mode
+
+
+def _telemetry_direct_content_type(value) -> str:
+    content_type = str(value or "text/plain").strip().lower()
+    if content_type not in TELEMETRY_DIRECT_CONTENT_TYPES:
+        raise ValueError("不受支持的浏览器直连 Content-Type")
+    return content_type
+
+
+def _telemetry_url(value, *, field_name: str, required: bool) -> str:
+    url = str(value or "").strip().rstrip("/")
+    if not url:
+        if required:
+            raise ValueError(f"{field_name}不能为空")
+        return ""
+    if len(url) > 2048:
+        raise ValueError(f"{field_name}过长")
+    parts = urlsplit(url)
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.fragment
+    ):
+        raise ValueError(f"{field_name}必须是无用户信息和片段的完整 HTTP(S) URL")
+    return url
+
+
+def _telemetry_secret(value) -> str:
+    secret = str(value or "")
+    if len(secret) > 2048 or "\r" in secret or "\n" in secret:
+        raise ValueError("遥测密钥格式无效")
+    return secret
+
+
+def _telemetry_header_name(value, *, default: str) -> str:
+    name = str(value or default).strip()
+    if not name or len(name) > 80:
+        raise ValueError("自定义认证 Header 名称无效")
+    allowed = set("!#$%&'*+-.^_`|~")
+    if any(not (char.isalnum() or char in allowed) for char in name):
+        raise ValueError("自定义认证 Header 名称无效")
+    if name.casefold() in {"host", "content-length", "connection", "content-type"}:
+        raise ValueError("该 Header 由 Passkey-Auth 管理，不能覆盖")
+    return name
+
+
+def _telemetry_headers(value) -> dict[str, str]:
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("自定义 Headers 必须是 JSON 对象")
+    if len(value) > 12:
+        raise ValueError("自定义 Headers 最多允许 12 项")
+    headers: dict[str, str] = {}
+    for raw_name, raw_value in value.items():
+        name = _telemetry_header_name(raw_name, default="")
+        if name.casefold() == "authorization":
+            raise ValueError("Authorization 请通过认证方式配置，避免在界面中回显密钥")
+        header_value = str(raw_value)
+        if len(header_value) > 512 or "\r" in header_value or "\n" in header_value:
+            raise ValueError("自定义 Header 值无效")
+        headers[name] = header_value
+    return headers
+
+
+def _sensitive_header_name(name: str) -> bool:
+    compact = str(name).casefold().replace("-", "").replace("_", "")
+    return any(
+        marker in compact
+        for marker in ("authorization", "apikey", "token", "secret", "cookie")
+    )
+
+
+def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, minimum), maximum)
+
+
+def _bounded_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, minimum), maximum)
 
 
 def _user_from_row(row: sqlite3.Row) -> User:

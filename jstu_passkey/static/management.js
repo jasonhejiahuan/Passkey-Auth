@@ -8,7 +8,10 @@ const editorTitle = document.querySelector("#editor-title");
 const editorContent = document.querySelector("#editor-content");
 let actionToken = window.sessionStorage.getItem(ACTION_TOKEN_STORAGE_KEY) || "";
 let state = null;
+let telemetryState = null;
+let telemetryLoaded = false;
 let settingsSaveChain = Promise.resolve();
+let statusTimer = null;
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
@@ -20,6 +23,12 @@ document.querySelector("#user-search").addEventListener("input", renderUsers);
 document.querySelector("#new-platform-button").addEventListener("click", openNewPlatform);
 document.querySelector("#registration-settings").addEventListener("change", saveRegistration);
 document.querySelector("#passkey-settings").addEventListener("change", handlePasskeySettingChange);
+document.querySelector("#telemetry-settings").addEventListener("change", saveTelemetrySettings);
+document.querySelector("#telemetry-backend-settings").addEventListener("submit", saveTelemetryBackend);
+document.querySelector("#telemetry-backend-settings").addEventListener("change", renderTelemetryBackendFields);
+document.querySelector("#test-telemetry-backend").addEventListener("click", testTelemetryBackend);
+document.querySelector("#pair-jason-telemetry").addEventListener("click", pairJasonTelemetry);
+document.querySelector("#clear-telemetry-button").addEventListener("click", clearTelemetry);
 document.querySelectorAll("[data-clear-log]").forEach((button) => {
   button.addEventListener("click", () => clearLogs(button.dataset.clearLog));
 });
@@ -30,6 +39,7 @@ async function loadOverview() {
   try {
     state = await requestJson("/api/management/overview");
     renderAll();
+    if (telemetryLoaded) await loadTelemetry({ silent: true });
     setStatus("数据已更新", "success", true);
   } catch (error) {
     setStatus(error.message, "error");
@@ -74,6 +84,7 @@ function showView(name, options = {}) {
   });
   const active = document.querySelector(`.nav-item[data-view="${name}"]`);
   document.querySelector("#view-title").textContent = active.textContent;
+  if (name === "telemetry") void loadTelemetry();
   if (options.updateHash !== false) {
     const nextHash = `#${name}`;
     if (window.location.hash !== nextHash) {
@@ -477,6 +488,494 @@ function savePasskeySettings() {
   });
 }
 
+const telemetryFeatureLabels = {
+  screen: "屏幕",
+  hardware: "硬件",
+  fonts: "字体",
+  battery: "电池",
+  network: "网络",
+  preferences: "显示偏好",
+};
+
+async function loadTelemetry(options = {}) {
+  if (!options.silent) {
+    document.querySelector("#telemetry-summary").innerHTML =
+      '<p class="empty compact-empty">正在读取遥测统计…</p>';
+  }
+  try {
+    telemetryState = await requestJson("/api/management/telemetry");
+    telemetryLoaded = true;
+    renderTelemetry();
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+function renderTelemetry() {
+  if (!telemetryState || !state) return;
+  const form = document.querySelector("#telemetry-settings");
+  const settings = telemetryState.settings;
+  form.elements.enabled.checked = settings.enabled;
+  form.elements.anonymousEnabled.checked = settings.anonymousEnabled;
+  form.elements.retentionDays.value = String(settings.retentionDays);
+  form.querySelectorAll('[name="telemetryFeature"]').forEach((input) => {
+    input.checked = settings.defaultFeatures.includes(input.value);
+  });
+  renderTelemetryBackend();
+  const external = settings.backend !== "builtin";
+  document.querySelector("#telemetry-local-actions").hidden = external;
+  const notice = document.querySelector("#telemetry-external-notice");
+  notice.hidden = !external;
+  if (external) {
+    const backendLabel = settings.backend === "jason"
+      ? "jason-telemetry"
+      : "自定义第三方服务";
+    const pathLabel = settings.deliveryMode === "direct"
+      ? "浏览器直接发送，Passkey-Auth 不接收或保存样本"
+      : "由 Passkey-Auth 的有界后台队列异步转发";
+    notice.textContent = `当前数据由 ${backendLabel} 保存；${pathLabel}。本地统计、CSV 和清理功能不会触发外部查询。`;
+  }
+  renderTelemetrySummary();
+  if (external) {
+    ["#telemetry-os-chart", "#telemetry-browser-chart", "#telemetry-device-chart", "#telemetry-feature-chart"]
+      .forEach((selector) => {
+        document.querySelector(selector).innerHTML =
+          '<p class="muted chart-empty">统计由外部接收端管理</p>';
+      });
+  } else {
+    renderTelemetryChart(
+      "#telemetry-os-chart",
+      telemetryState.statistics.distributions.operatingSystems,
+    );
+    renderTelemetryChart(
+      "#telemetry-browser-chart",
+      telemetryState.statistics.distributions.browsers,
+    );
+    renderTelemetryChart(
+      "#telemetry-device-chart",
+      telemetryState.statistics.distributions.devices,
+    );
+    renderTelemetryChart(
+      "#telemetry-feature-chart",
+      telemetryState.statistics.distributions.features,
+    );
+  }
+  renderTelemetryEvents();
+  renderTelemetryUsers();
+}
+
+function renderTelemetrySummary() {
+  if (telemetryState.settings.backend !== "builtin") {
+    const delivery = telemetryState.settings.delivery;
+    const direct = telemetryState.settings.deliveryMode === "direct";
+    const metrics = direct
+      ? [
+        ["发送路径", "浏览器直连"],
+        ["服务端队列", "未启动"],
+        ["本地落盘", "关闭"],
+        ["密钥下发", "不会"],
+      ]
+      : [
+        ["等待发送", delivery.queued.toLocaleString()],
+        ["已发送", delivery.sent.toLocaleString()],
+        ["失败", delivery.failed.toLocaleString()],
+        ["队列丢弃", delivery.dropped.toLocaleString()],
+      ];
+    document.querySelector("#telemetry-summary").innerHTML = metrics.map(([label, value]) => `
+      <article class="metric-card">
+        <span>${label}</span>
+        <strong>${value}</strong>
+      </article>
+    `).join("");
+    return;
+  }
+  const summary = telemetryState.statistics.summary;
+  const metrics = [
+    ["总样本", summary.total.toLocaleString()],
+    ["24 小时", summary.last24h.toLocaleString()],
+    ["已识别用户", summary.identifiedUsers.toLocaleString()],
+    ["平均载荷", `${summary.averagePayloadBytes.toLocaleString()} B`],
+  ];
+  document.querySelector("#telemetry-summary").innerHTML = metrics.map(([label, value]) => `
+    <article class="metric-card">
+      <span>${label}</span>
+      <strong>${value}</strong>
+    </article>
+  `).join("");
+}
+
+function renderTelemetryChart(selector, items) {
+  const target = document.querySelector(selector);
+  if (!items.length) {
+    target.innerHTML = '<p class="muted chart-empty">暂无数据</p>';
+    return;
+  }
+  const maximum = Math.max(...items.map((item) => item.count), 1);
+  target.innerHTML = items.slice(0, 8).map((item) => {
+    const width = Math.max(Math.round((item.count / maximum) * 100), 4);
+    const widthClass = Math.min(Math.max(Math.ceil(width / 10) * 10, 10), 100);
+    const label = telemetryFeatureLabels[item.label] || item.label;
+    return `
+      <div class="bar-row">
+        <div><span>${escapeHtml(label)}</span><strong>${item.count}</strong></div>
+        <span class="bar-track"><span class="bar-fill bar-width-${widthClass}"></span></span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderTelemetryEvents() {
+  if (telemetryState.settings.backend !== "builtin") {
+    document.querySelector("#telemetry-recent-list").innerHTML =
+      '<p class="empty">外部模式不会在 Passkey-Auth 中保留样本。</p>';
+    return;
+  }
+  const entries = telemetryState.statistics.recent;
+  renderList("#telemetry-recent-list", entries, (entry, index) => {
+    const user = entry.userId
+      ? state.users.find((candidate) => candidate.id === entry.userId)
+      : null;
+    const featureNames = entry.features
+      .map((feature) => telemetryFeatureLabels[feature] || feature)
+      .join("、");
+    return `
+      <article class="data-row telemetry-event-row">
+        <div class="row-primary">
+          <strong>${escapeHtml(user?.username || (entry.userId ? `已删除用户 #${entry.userId}` : "匿名访客"))}</strong>
+          <small>${formatTime(entry.createdAt)} · ${escapeHtml(entry.path)}</small>
+        </div>
+        <span>${escapeHtml(entry.osFamily)} / ${escapeHtml(entry.browserFamily)}</span>
+        <span>${escapeHtml(entry.deviceClass)}</span>
+        <span>${escapeHtml(featureNames)}</span>
+        <button type="button" data-telemetry-detail="${index}">详情</button>
+      </article>
+    `;
+  });
+  document.querySelectorAll("[data-telemetry-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = telemetryState.statistics.recent[Number(button.dataset.telemetryDetail)];
+      openDetail("遥测样本", JSON.stringify(entry, null, 2));
+    });
+  });
+}
+
+function renderTelemetryUsers() {
+  const policies = telemetryState.userPolicies;
+  document.querySelector("#telemetry-users-list").innerHTML = state.users.map((user) => {
+    const policy = policies[String(user.id)] || { mode: "inherit", features: [] };
+    const effectiveFeatures = policy.mode === "inherit"
+      ? telemetryState.settings.defaultFeatures
+      : policy.features;
+    return `
+      <article class="telemetry-policy-row" data-telemetry-user="${user.id}">
+        <div class="row-primary">
+          <strong>${escapeHtml(user.username)}</strong>
+          <small>${policy.mode === "off" ? "不下发任何遥测代码" : policy.mode === "custom" ? "仅下发自定义模块" : "继承默认策略"}</small>
+        </div>
+        <label>策略
+          <select data-telemetry-user-mode="${user.id}">
+            <option value="inherit" ${policy.mode === "inherit" ? "selected" : ""}>继承默认</option>
+            <option value="off" ${policy.mode === "off" ? "selected" : ""}>关闭</option>
+            <option value="custom" ${policy.mode === "custom" ? "selected" : ""}>自定义</option>
+          </select>
+        </label>
+        <div class="telemetry-user-features">
+          ${Object.entries(telemetryFeatureLabels).map(([feature, label]) => `
+            <label class="switch-row">
+              <input type="checkbox" data-telemetry-user-feature="${user.id}" value="${feature}"
+                ${effectiveFeatures.includes(feature) ? "checked" : ""}
+                ${policy.mode !== "custom" ? "disabled" : ""}>
+              <span>${label}</span>
+            </label>
+          `).join("")}
+        </div>
+      </article>
+    `;
+  }).join("") || '<p class="empty">暂无用户</p>';
+
+  document.querySelectorAll("[data-telemetry-user-mode]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const userId = Number(select.dataset.telemetryUserMode);
+      const row = document.querySelector(`[data-telemetry-user="${userId}"]`);
+      row.querySelectorAll("[data-telemetry-user-feature]").forEach((input) => {
+        input.disabled = select.value !== "custom";
+        if (select.value === "custom" && !input.checked) {
+          input.checked = telemetryState.settings.defaultFeatures.includes(input.value);
+        }
+      });
+      saveUserTelemetry(userId);
+    });
+  });
+  document.querySelectorAll("[data-telemetry-user-feature]").forEach((input) => {
+    input.addEventListener("change", () => {
+      saveUserTelemetry(Number(input.dataset.telemetryUserFeature));
+    });
+  });
+}
+
+function renderTelemetryBackend() {
+  const form = document.querySelector("#telemetry-backend-settings");
+  const settings = telemetryState.settings;
+  form.elements.backend.value = settings.backend;
+  form.elements.deliveryMode.value = settings.deliveryMode;
+  form.elements.jasonBaseUrl.value = settings.jason.baseUrl || "";
+  form.elements.jasonApiKey.value = "";
+  form.elements.jasonApiKey.placeholder = settings.jason.apiKeyConfigured
+    ? "已配置；留空表示保持当前密钥"
+    : "输入 jason-telemetry API Key";
+  form.elements.clearJasonApiKey.checked = false;
+  form.elements.customUrl.value = settings.custom.url || "";
+  form.elements.customAuthMode.value = settings.custom.authMode;
+  form.elements.customAuthHeader.value = settings.custom.authHeader || "X-Api-Key";
+  form.elements.customSecret.value = "";
+  form.elements.customSecret.placeholder = settings.custom.secretConfigured
+    ? "已配置；留空表示保持当前密钥"
+    : "输入认证密钥";
+  form.elements.clearCustomSecret.checked = false;
+  form.elements.customHeaders.value = JSON.stringify(settings.custom.headers || {}, null, 2);
+  form.elements.customDirectContentType.value = settings.custom.directContentType;
+  form.elements.timeoutSeconds.value = String(settings.timeoutSeconds);
+  renderTelemetryBackendFields();
+  renderTelemetryDeliveryStatus();
+}
+
+function renderTelemetryBackendFields() {
+  const form = document.querySelector("#telemetry-backend-settings");
+  const backend = form.elements.backend.value;
+  const delivery = form.elements.deliveryMode;
+  if (backend === "builtin") {
+    delivery.value = "relay";
+    delivery.disabled = true;
+  } else {
+    delivery.disabled = false;
+  }
+  const deliveryMode = delivery.value;
+  document.querySelector("#telemetry-jason-fields").hidden = backend !== "jason";
+  document.querySelector("#telemetry-custom-fields").hidden = backend !== "custom";
+  document.querySelector("#telemetry-direct-content-type").hidden =
+    backend !== "custom" || deliveryMode !== "direct";
+
+  const authMode = form.elements.customAuthMode.value;
+  document.querySelector("#telemetry-custom-auth-header").hidden = authMode !== "header";
+  document.querySelector("#telemetry-custom-secret").hidden = authMode === "none";
+  document.querySelector("#telemetry-clear-custom-secret").hidden = authMode === "none";
+
+  const note = document.querySelector("#telemetry-delivery-note");
+  if (backend === "builtin") {
+    note.textContent = "样本由内置 SQLite 保存并驱动本页统计。不会加载任何外部适配器。";
+  } else if (deliveryMode === "direct") {
+    note.textContent = "浏览器取得临时目标后直接发送，节省 Passkey-Auth 带宽和 CPU；目标必须支持浏览器跨域或免预检文本 POST。";
+  } else {
+    note.textContent = "浏览器只连接 Passkey-Auth；服务端验证样本后立即入有界队列，由后台线程转发，不等待外部服务响应。";
+  }
+}
+
+function renderTelemetryDeliveryStatus() {
+  const settings = telemetryState.settings;
+  const target = document.querySelector("#telemetry-delivery-status");
+  if (settings.backend === "builtin") {
+    target.textContent = "当前使用内置事件库。";
+    return;
+  }
+  if (settings.deliveryMode === "direct") {
+    target.textContent = "浏览器直连模式不在 Passkey-Auth 中维护外部发送计数。";
+    return;
+  }
+  const delivery = settings.delivery;
+  target.textContent = delivery.state === "idle"
+    ? "后台发送器尚未启动；第一条有效样本到达时才会按需加载。"
+    : `后台队列 ${delivery.queued}，成功 ${delivery.sent}，失败 ${delivery.failed}，丢弃 ${delivery.dropped}。`;
+}
+
+function saveTelemetrySettings() {
+  const form = document.querySelector("#telemetry-settings");
+  const defaultFeatures = [...form.querySelectorAll('[name="telemetryFeature"]:checked')]
+    .map((input) => input.value);
+  if (form.elements.enabled.checked && !defaultFeatures.length) {
+    setStatus("启用遥测时至少选择一种采集能力", "error");
+    renderTelemetry();
+    return;
+  }
+  queueTelemetrySave("/api/management/settings/telemetry", {
+    method: "PATCH",
+    body: {
+      enabled: form.elements.enabled.checked,
+      anonymousEnabled: form.elements.anonymousEnabled.checked,
+      defaultFeatures,
+      retentionDays: Number(form.elements.retentionDays.value),
+    },
+  });
+}
+
+async function saveTelemetryBackend(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const backend = form.elements.backend.value;
+  const deliveryMode = backend === "builtin"
+    ? "relay"
+    : form.elements.deliveryMode.value;
+  let customHeaders;
+  try {
+    customHeaders = JSON.parse(form.elements.customHeaders.value || "{}");
+    if (!customHeaders || Array.isArray(customHeaders) || typeof customHeaders !== "object") {
+      throw new Error();
+    }
+  } catch (_error) {
+    setStatus("非敏感 Headers 必须是 JSON 对象", "error");
+    return;
+  }
+  if (
+    backend === "custom"
+    && deliveryMode === "direct"
+    && form.elements.customAuthMode.value !== "none"
+  ) {
+    setStatus("浏览器直连不能使用服务端保存的私有认证密钥", "error");
+    return;
+  }
+
+  const baseForm = document.querySelector("#telemetry-settings");
+  const defaultFeatures = [...baseForm.querySelectorAll('[name="telemetryFeature"]:checked')]
+    .map((input) => input.value);
+  const body = {
+    enabled: baseForm.elements.enabled.checked,
+    anonymousEnabled: baseForm.elements.anonymousEnabled.checked,
+    defaultFeatures,
+    retentionDays: Number(baseForm.elements.retentionDays.value),
+    backend,
+    deliveryMode,
+    jasonBaseUrl: form.elements.jasonBaseUrl.value.trim(),
+    customUrl: form.elements.customUrl.value.trim(),
+    customAuthMode: form.elements.customAuthMode.value,
+    customAuthHeader: form.elements.customAuthHeader.value.trim(),
+    customHeaders,
+    customDirectContentType: form.elements.customDirectContentType.value,
+    timeoutSeconds: Number(form.elements.timeoutSeconds.value),
+    clearJasonApiKey: form.elements.clearJasonApiKey.checked,
+    clearCustomSecret: form.elements.clearCustomSecret.checked,
+  };
+  if (form.elements.jasonApiKey.value) body.jasonApiKey = form.elements.jasonApiKey.value;
+  if (form.elements.customSecret.value) body.customSecret = form.elements.customSecret.value;
+  setStatus("正在保存后端配置…", "muted");
+  try {
+    await requestJson("/api/management/settings/telemetry", {
+      method: "PATCH",
+      body,
+    });
+    await loadTelemetry({ silent: true });
+    setStatus("后端配置已保存", "success", true);
+  } catch (error) {
+    setStatus(error.message, "error");
+    await loadTelemetry({ silent: true });
+  }
+}
+
+async function testTelemetryBackend() {
+  const button = document.querySelector("#test-telemetry-backend");
+  button.disabled = true;
+  try {
+    const result = await requestJson("/api/management/telemetry/backend/test", {
+      method: "POST",
+      body: {},
+    });
+    const latency = result.latencyMs === undefined ? "" : `，${result.latencyMs} ms`;
+    setStatus(`遥测后端连接成功${latency}`, "success", true);
+  } catch (error) {
+    setStatus(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function pairJasonTelemetry() {
+  const form = document.querySelector("#telemetry-backend-settings");
+  const baseUrl = form.elements.jasonBaseUrl.value.trim();
+  const pairingCode = form.elements.jasonPairingCode.value.trim();
+  if (!baseUrl || !pairingCode) {
+    setStatus("请输入 jason-telemetry 地址和一次性配对码", "error");
+    return;
+  }
+  const button = document.querySelector("#pair-jason-telemetry");
+  button.disabled = true;
+  setStatus("正在与 jason-telemetry 安全协商…", "muted");
+  try {
+    const result = await requestJson(
+      "/api/management/telemetry/backend/pair-jason",
+      {
+        method: "POST",
+        body: {
+          baseUrl,
+          pairingCode,
+          timeoutSeconds: Number(form.elements.timeoutSeconds.value),
+          deliveryMode: form.elements.deliveryMode.value,
+        },
+      },
+    );
+    form.elements.jasonPairingCode.value = "";
+    await loadTelemetry({ silent: true });
+    const version = result.serverVersion ? `（${result.serverVersion}）` : "";
+    setStatus(`自动配对成功${version}，API Key 已保存且不会回显`, "success", true);
+  } catch (error) {
+    setStatus(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function saveUserTelemetry(userId) {
+  const row = document.querySelector(`[data-telemetry-user="${userId}"]`);
+  const mode = row.querySelector("[data-telemetry-user-mode]").value;
+  const features = [...row.querySelectorAll("[data-telemetry-user-feature]:checked")]
+    .map((input) => input.value);
+  if (mode === "custom" && !features.length) {
+    setStatus("自定义用户策略至少选择一种采集能力", "error");
+    renderTelemetryUsers();
+    return;
+  }
+  queueTelemetrySave(`/api/management/users/${userId}/telemetry`, {
+    method: "PATCH",
+    body: { mode, features },
+  });
+}
+
+function queueTelemetrySave(url, options) {
+  settingsSaveChain = settingsSaveChain.then(async () => {
+    setStatus("正在自动保存…", "muted");
+    try {
+      await requestJson(url, options);
+      await loadTelemetry({ silent: true });
+      setStatus("已自动保存", "success", true);
+    } catch (error) {
+      setStatus(error.message, "error");
+      await loadTelemetry({ silent: true });
+    }
+  });
+}
+
+async function clearTelemetry() {
+  try {
+    const beforeInput = prompt("清理此时间之前的遥测数据（ISO 日期）；留空表示全部清理。");
+    if (beforeInput === null) return;
+    const before = beforeInput.trim()
+      ? Math.floor(new Date(beforeInput).getTime() / 1000)
+      : null;
+    if (beforeInput.trim() && !Number.isFinite(before)) {
+      setStatus("日期格式无效", "error");
+      return;
+    }
+    const query = before ? `?before=${before}` : "";
+    const preview = await requestJson(`/api/management/telemetry/events/count${query}`);
+    if (!confirm(`将永久删除 ${preview.count} 条遥测样本。确认清理？`)) return;
+    await requestJson("/api/management/telemetry/events/clear", {
+      method: "POST",
+      body: { before },
+    });
+    await loadTelemetry({ silent: true });
+    setStatus(`已清理 ${preview.count} 条遥测样本`, "success", true);
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
 function queueSettingsSave(url, options) {
   settingsSaveChain = settingsSaveChain.then(async () => {
     setStatus("正在自动保存…", "muted");
@@ -590,10 +1089,16 @@ function localDateTime(timestamp) {
 }
 
 function setStatus(message, kind, autoHide = false) {
+  if (statusTimer) window.clearTimeout(statusTimer);
   statusOutput.hidden = false;
   statusOutput.textContent = message;
   statusOutput.dataset.kind = kind;
-  if (autoHide) setTimeout(() => { statusOutput.hidden = true; }, 4000);
+  if (autoHide) {
+    statusTimer = window.setTimeout(() => {
+      statusOutput.hidden = true;
+      statusTimer = null;
+    }, 10000);
+  }
 }
 
 function escapeHtml(value) {

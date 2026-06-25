@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -22,11 +23,16 @@ class ManagementTest(unittest.TestCase):
                 "PASSKEY_DATABASE",
                 "FLASK_SECRET_KEY",
                 "PASSKEY_HOME_AUTH_ENABLED",
+                "PASSKEY_TELEMETRY_DATABASE",
             )
         }
         os.environ["PASSKEY_DATABASE"] = self.database_path
         os.environ["FLASK_SECRET_KEY"] = "management-test-secret"
         os.environ["PASSKEY_HOME_AUTH_ENABLED"] = "true"
+        os.environ["PASSKEY_TELEMETRY_DATABASE"] = os.path.join(
+            self.tempdir.name,
+            "telemetry.sqlite3",
+        )
         self.app = create_app()
         self.app.testing = True
         self.client = self.app.test_client()
@@ -123,7 +129,13 @@ class ManagementTest(unittest.TestCase):
         self.assertIn("退出登录", body)
         self.assertIn('class="toggle-row"', body)
         self.assertIn('class="toggle-control"', body)
+        self.assertIn('id="telemetry-backend-settings"', body)
+        self.assertIn('id="pair-jason-telemetry"', body)
         self.assertIn("更改后自动保存", body)
+        self.assertIn('data-view="telemetry"', body)
+        self.assertIn('id="telemetry-settings"', body)
+        self.assertIn("关闭后不读取遥测库", body)
+        self.assertIn("按用户策略", body)
         self.assertNotIn("保存高级设置", body)
         self.assertNotIn(">保存设置</button>", body)
 
@@ -152,6 +164,16 @@ class ManagementTest(unittest.TestCase):
         self.assertIn('openDetail("User-Agent"', body)
         self.assertIn('data-audit-detail="${index}"', body)
         self.assertIn('openDetail("审计详情"', body)
+        self.assertIn("loadTelemetry", body)
+        self.assertIn("data-telemetry-user-mode", body)
+        self.assertIn("10000", body)
+
+    def test_telemetry_configuration_does_not_stick_over_user_policies(self) -> None:
+        css = self.client.get("/static/management.css").get_data(as_text=True)
+        stack_rule = css.split(".telemetry-config-stack {", 1)[1].split("}", 1)[0]
+
+        self.assertNotIn("position: sticky", stack_rule)
+        self.assertIn(".telemetry-user-policies {\n  grid-column: 1 / -1;\n  grid-row: 2;", css)
 
     def test_management_reauthentication_refreshes_recent_auth_without_logout(self) -> None:
         credential_id = b"credential-id"
@@ -459,6 +481,108 @@ class ManagementTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("至少选择一种", response.get_json()["error"])
+
+    def test_telemetry_settings_are_persistent_and_exposed_lazily(self) -> None:
+        response = self.client.patch(
+            "/api/management/settings/telemetry",
+            json={
+                "enabled": True,
+                "anonymousEnabled": False,
+                "defaultFeatures": ["screen", "hardware", "preferences"],
+                "retentionDays": 90,
+            },
+            headers=self.write_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        settings = self.store.get_telemetry_settings()
+        self.assertTrue(settings.enabled)
+        self.assertFalse(settings.anonymous_enabled)
+        self.assertEqual(settings.retention_days, 90)
+
+        overview = self.client.get("/api/management/overview").get_json()
+        self.assertNotIn("telemetry", overview)
+        telemetry = self.client.get("/api/management/telemetry").get_json()
+        self.assertTrue(telemetry["settings"]["enabled"])
+        self.assertEqual(
+            telemetry["settings"]["defaultFeatures"],
+            ["screen", "hardware", "preferences"],
+        )
+        self.assertEqual(telemetry["statistics"]["summary"]["total"], 0)
+
+    def test_per_user_telemetry_policy_is_persistent(self) -> None:
+        member = self.store.create_user("telemetry-member", b"t" * 32)
+
+        response = self.client.patch(
+            f"/api/management/users/{member.id}/telemetry",
+            json={"mode": "custom", "features": ["screen", "fonts"]},
+            headers=self.write_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        policy = self.store.list_user_telemetry_policies()[member.id]
+        self.assertEqual(policy.mode, "custom")
+        self.assertEqual(policy.features, ["screen", "fonts"])
+        telemetry = self.client.get("/api/management/telemetry").get_json()
+        self.assertEqual(
+            telemetry["userPolicies"][str(member.id)],
+            {"mode": "custom", "features": ["screen", "fonts"]},
+        )
+
+    def test_external_telemetry_secret_is_persistent_but_never_returned(self) -> None:
+        response = self.client.patch(
+            "/api/management/settings/telemetry",
+            json={
+                "enabled": True,
+                "anonymousEnabled": False,
+                "defaultFeatures": ["screen"],
+                "retentionDays": 30,
+                "backend": "jason",
+                "deliveryMode": "relay",
+                "jasonBaseUrl": "https://telemetry.example.com",
+                "jasonApiKey": "abcd-1234-ef56-7890",
+                "timeoutSeconds": 1,
+            },
+            headers=self.write_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        stored = self.store.get_telemetry_settings()
+        self.assertEqual(stored.backend, "jason")
+        self.assertEqual(stored.jason_api_key, "abcd-1234-ef56-7890")
+        payload = self.client.get("/api/management/telemetry").get_json()
+        self.assertTrue(payload["settings"]["jason"]["apiKeyConfigured"])
+        self.assertNotIn("apiKey", payload["settings"]["jason"])
+        self.assertNotIn(
+            "abcd-1234-ef56-7890",
+            json.dumps(payload),
+        )
+
+    def test_jason_pairing_route_never_returns_negotiated_secret(self) -> None:
+        runtime = self.app.extensions["telemetry_runtime"]
+        with patch.object(
+            runtime,
+            "pair_jason",
+            return_value={
+                "ok": True,
+                "backend": "jason",
+                "apiKeyConfigured": True,
+                "serverVersion": "13.0.0",
+            },
+        ):
+            response = self.client.post(
+                "/api/management/telemetry/backend/pair-jason",
+                json={
+                    "baseUrl": "https://telemetry.example.com",
+                    "pairingCode": "one-time-pairing-code",
+                    "timeoutSeconds": 1,
+                },
+                headers=self.write_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["apiKeyConfigured"])
+        self.assertNotIn("apiKey", response.get_json())
 
     def test_new_platform_secret_is_only_returned_and_hashed_in_storage(self) -> None:
         response = self.client.post(

@@ -94,6 +94,36 @@ particular interest include:
 - Security-relevant cryptographic misuse.
 - Vulnerable dependencies with a demonstrated impact on this project.
 
+## Telemetry Data
+
+Browser telemetry is disabled by default. Built-in mode uses a separate SQLite
+database; external modes use a lazy-loaded jason-telemetry or custom HTTP
+adapter and do not duplicate events into the local database.
+Collection requests require a short-lived signed token bound to the current
+in-memory policy and feature set. The token is collection authorization only; it
+is never accepted as login, OAuth, Management, or identity proof.
+
+The collector does not persist raw IP addresses or create a stable browser
+fingerprint. It stores a keyed IP hash, coarse browser/device labels, the
+administrator-selected signals, and the authenticated user ID when one is
+already present in the Passkey-Auth session. Font, battery, hardware, and
+network signals can increase identifiability and should be enabled only with an
+appropriate notice, retention period, and legal basis for the deployment.
+
+Management telemetry writes retain the normal admin session, CSRF, recent
+Passkey reauthentication, and rotating action-token requirements. Treat
+telemetry exports, the telemetry SQLite database, external endpoint
+configuration, and external API credentials as sensitive operational data.
+External credentials are never returned by Management APIs or inserted into
+browser HTML. Browser-direct jason-telemetry delivery receives only a one-time
+collection URL. Custom browser-direct delivery cannot use private Bearer/header
+credentials; authenticated custom endpoints must use server relay.
+
+Jason Telemetry v13 automatic pairing uses a short-lived, one-use pairing code,
+two independent nonces, and HMAC challenge-response. Pairing requires HTTPS
+except on loopback. The generated API key is returned once over the server-to-
+server connection and is never returned to the administrator's browser.
+
 Please conduct testing only on code, accounts, and systems you own or are
 explicitly authorized to assess. If testing unexpectedly exposes sensitive data,
 stop and report the issue privately with only the minimum evidence required.

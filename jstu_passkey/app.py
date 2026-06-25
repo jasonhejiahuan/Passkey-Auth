@@ -9,6 +9,7 @@ import re
 import sys
 from dataclasses import replace
 from base64 import b64decode
+from html import escape
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from urllib.error import HTTPError, URLError
@@ -26,6 +27,7 @@ from .config import AppConfig, ServerConfig
 from .management import create_management_blueprint
 from .register_client import REGISTER_CLIENT_JS
 from .storage import OAuthChallengeRequest, PasskeyStore, User
+from .telemetry import TelemetryRuntime
 from .webauthn_service import (
     WebAuthnConfig,
     build_authentication_options,
@@ -46,6 +48,15 @@ def create_app() -> Flask:
 
     store = PasskeyStore(config.passkey_database)
     app.extensions["passkey_store"] = store
+    app.extensions["telemetry_runtime"] = TelemetryRuntime(
+        settings_store=store,
+        database_path=config.passkey_telemetry_database,
+        secret_key=config.flask_secret_key,
+        default_enabled=bool(
+            config.passkey_telemetry_token_url
+            and config.passkey_telemetry_api_key
+        ),
+    )
     store.bootstrap_oauth_client(
         client_id=config.passkey_oauth_client_id,
         name=config.passkey_oauth_client_name,
@@ -127,6 +138,40 @@ def create_app() -> Flask:
     def telemetry_browser_token():
         payload, status = _create_telemetry_browser_token(app)
         return _no_store(jsonify(payload)), status
+
+    @app.post("/api/telemetry/collect")
+    def telemetry_collect():
+        if request.content_length and request.content_length > 16_384:
+            return _no_store(
+                (jsonify({"ok": False, "error": "telemetry_payload_too_large"}), 413)
+            )
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _no_store(
+                (jsonify({"ok": False, "error": "telemetry_payload_invalid"}), 400)
+            )
+        result, status = app.extensions["telemetry_runtime"].collect(
+            payload=payload,
+            remote_addr=request.remote_addr or "",
+            user_agent=request.headers.get("User-Agent", ""),
+        )
+        return _no_store((jsonify(result), status))
+
+    @app.post("/api/telemetry/direct-target")
+    def telemetry_direct_target():
+        if request.content_length and request.content_length > 4096:
+            return _no_store(
+                (jsonify({"ok": False, "error": "telemetry_payload_too_large"}), 413)
+            )
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _no_store(
+                (jsonify({"ok": False, "error": "telemetry_payload_invalid"}), 400)
+            )
+        result, status = app.extensions["telemetry_runtime"].direct_target(
+            token=str(payload.get("token") or "")
+        )
+        return _no_store((jsonify(result), status))
 
     @app.get("/demo/oauth")
     def oauth_demo():
@@ -1128,7 +1173,8 @@ def _inject_browser_telemetry(app: Flask, response) -> None:
         or str(request.endpoint or "").startswith("admin_recovery")
     ):
         return
-    if not _browser_telemetry_enabled(app) or response.is_streamed:
+    runtime: TelemetryRuntime = app.extensions["telemetry_runtime"]
+    if not runtime.enabled or response.is_streamed:
         return
 
     content_type = response.headers.get("Content-Type", "")
@@ -1136,22 +1182,33 @@ def _inject_browser_telemetry(app: Flask, response) -> None:
         return
 
     body = response.get_data(as_text=True)
-    if "</body>" not in body or "data-passkey-telemetry-status-url" in body:
+    if "</body>" not in body or "data-passkey-telemetry-token" in body:
         return
 
+    raw_user_id = session.get("signed_in_user_id")
+    try:
+        user_id = int(raw_user_id) if raw_user_id is not None else None
+    except (TypeError, ValueError):
+        user_id = None
+    decision = runtime.decision_for(user_id)
+    if not decision:
+        return
+    token = runtime.issue_collection_token(user_id=user_id, decision=decision)
+    endpoint = (
+        "/api/telemetry/direct-target"
+        if runtime.delivery_mode == "direct"
+        else "/api/telemetry/collect"
+    )
     script = (
         '<script defer src="/static/telemetry.js" '
-        'data-passkey-telemetry-token-url="/api/telemetry/browser-token">'
+        f'data-passkey-telemetry-endpoint="{endpoint}" '
+        f'data-passkey-telemetry-delivery="{runtime.delivery_mode}" '
+        f'data-passkey-telemetry-token="{escape(token, quote=True)}" '
+        f'data-passkey-telemetry-policy="{decision.policy_key}" '
+        f'data-passkey-telemetry-features="{",".join(decision.features)}">'
         "</script>"
     )
     response.set_data(body.replace("</body>", f"{script}</body>", 1))
-
-
-def _browser_telemetry_enabled(app: Flask) -> bool:
-    return bool(
-        str(app.config.get("PASSKEY_TELEMETRY_TOKEN_URL") or "").strip()
-        and str(app.config.get("PASSKEY_TELEMETRY_API_KEY") or "").strip()
-    )
 
 
 def _create_telemetry_browser_token(app: Flask) -> tuple[dict, int]:
@@ -1211,6 +1268,11 @@ def _apply_security_headers(app: Flask, response) -> None:
         "Permissions-Policy",
         "publickey-credentials-create=(self), publickey-credentials-get=(self)",
     )
+    runtime: TelemetryRuntime = app.extensions["telemetry_runtime"]
+    direct_origin = runtime.direct_connect_origin
+    connect_src = "'self'"
+    if direct_origin:
+        connect_src += f" {direct_origin}"
     _set_header_if_missing(
         response,
         "Content-Security-Policy",
@@ -1219,8 +1281,8 @@ def _apply_security_headers(app: Flask, response) -> None:
             "script-src 'self'; "
             "style-src 'self'; "
             "img-src 'self' data:; "
-            "connect-src 'self' https://115.29.205.236:15000; "
-            "frame-src 'self' https://115.29.205.236:15000; "
+            f"connect-src {connect_src}; "
+            "frame-src 'self'; "
             "base-uri 'none'; "
             "form-action 'self'; "
             "frame-ancestors 'none'"

@@ -177,6 +177,7 @@ def create_management_blueprint() -> Blueprint:
         if store.get_permissions(target.id)["admin"] and store.count_enabled_admins() <= 1:
             return _error("系统必须保留至少一名可用管理员", 409)
         store.delete_user(target.id)
+        _telemetry().drop_user_policy(target.id)
         _audit(actor, "user.delete", "user", str(target.id), {"username": target.username})
         return _no_store(jsonify({"ok": True}))
 
@@ -330,6 +331,227 @@ def create_management_blueprint() -> Blueprint:
         )
         return _no_store(jsonify({"ok": True}))
 
+    @blueprint.get("/api/management/telemetry")
+    def telemetry_overview():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        runtime = _telemetry()
+        return _no_store(
+            jsonify(
+                {
+                    "ok": True,
+                    "settings": runtime.settings_payload(),
+                    "userPolicies": runtime.policies_payload(),
+                    "statistics": runtime.statistics(),
+                }
+            )
+        )
+
+    @blueprint.patch("/api/management/settings/telemetry")
+    def update_telemetry_settings():
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        data = request.get_json(force=True)
+        try:
+            settings = _telemetry().update_settings(
+                enabled=bool(data.get("enabled", False)),
+                anonymous_enabled=bool(data.get("anonymousEnabled", False)),
+                default_features=data.get("defaultFeatures") or [],
+                retention_days=int(data.get("retentionDays") or 30),
+                backend=(
+                    str(data["backend"])
+                    if "backend" in data
+                    else None
+                ),
+                delivery_mode=(
+                    str(data["deliveryMode"])
+                    if "deliveryMode" in data
+                    else None
+                ),
+                jason_base_url=(
+                    str(data["jasonBaseUrl"])
+                    if "jasonBaseUrl" in data
+                    else None
+                ),
+                jason_api_key=_secret_update(
+                    data,
+                    value_key="jasonApiKey",
+                    clear_key="clearJasonApiKey",
+                ),
+                custom_url=(
+                    str(data["customUrl"])
+                    if "customUrl" in data
+                    else None
+                ),
+                custom_auth_mode=(
+                    str(data["customAuthMode"])
+                    if "customAuthMode" in data
+                    else None
+                ),
+                custom_auth_header=(
+                    str(data["customAuthHeader"])
+                    if "customAuthHeader" in data
+                    else None
+                ),
+                custom_secret=_secret_update(
+                    data,
+                    value_key="customSecret",
+                    clear_key="clearCustomSecret",
+                ),
+                custom_headers=(
+                    data["customHeaders"]
+                    if "customHeaders" in data
+                    else None
+                ),
+                custom_direct_content_type=(
+                    str(data["customDirectContentType"])
+                    if "customDirectContentType" in data
+                    else None
+                ),
+                timeout_seconds=(
+                    float(data["timeoutSeconds"])
+                    if "timeoutSeconds" in data
+                    else None
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            return _error(str(error), 400)
+        _audit(
+            actor,
+            "telemetry_settings.update",
+            "settings",
+            "telemetry",
+            {
+                "enabled": settings.enabled,
+                "anonymousEnabled": settings.anonymous_enabled,
+                "defaultFeatures": settings.default_features,
+                "retentionDays": settings.retention_days,
+                "backend": settings.backend,
+                "deliveryMode": settings.delivery_mode,
+            },
+        )
+        return _no_store(jsonify({"ok": True}))
+
+    @blueprint.post("/api/management/telemetry/backend/test")
+    def test_telemetry_backend():
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        try:
+            result = _telemetry().test_backend()
+        except Exception:
+            return _error("遥测后端连接失败", 502)
+        _audit(
+            actor,
+            "telemetry_backend.test",
+            "settings",
+            "telemetry",
+            {"backend": result.get("backend")},
+        )
+        return _no_store(jsonify(result))
+
+    @blueprint.post("/api/management/telemetry/backend/pair-jason")
+    def pair_jason_telemetry():
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        data = request.get_json(force=True)
+        try:
+            result = _telemetry().pair_jason(
+                base_url=str(data.get("baseUrl") or ""),
+                pairing_code=str(data.get("pairingCode") or ""),
+                timeout_seconds=float(data.get("timeoutSeconds") or 1.0),
+                delivery_mode=str(data.get("deliveryMode") or "relay"),
+            )
+        except (TypeError, ValueError) as error:
+            return _error(str(error), 400)
+        except Exception:
+            return _error("自动配对失败，请检查地址、配对码和 TLS", 502)
+        _audit(
+            actor,
+            "telemetry_backend.pair",
+            "settings",
+            "telemetry",
+            {
+                "backend": "jason",
+                "serverVersion": result.get("serverVersion"),
+            },
+        )
+        return _no_store(jsonify(result))
+
+    @blueprint.patch("/api/management/users/<int:user_id>/telemetry")
+    def update_user_telemetry(user_id: int):
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        data = request.get_json(force=True)
+        try:
+            policy = _telemetry().update_user_policy(
+                user_id=user_id,
+                mode=str(data.get("mode") or "inherit"),
+                features=data.get("features") or [],
+            )
+        except (TypeError, ValueError) as error:
+            return _error(str(error), 400)
+        _audit(
+            actor,
+            "user.telemetry.update",
+            "user",
+            str(user_id),
+            {"mode": policy.mode, "features": policy.features},
+        )
+        return _no_store(jsonify({"ok": True}))
+
+    @blueprint.get("/api/management/telemetry/events/count")
+    def count_telemetry_events():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        before = int(request.args["before"]) if request.args.get("before") else None
+        try:
+            count = _telemetry().count_events(before=before)
+        except ValueError as error:
+            return _error(str(error), 409)
+        return _no_store(jsonify({"ok": True, "count": count}))
+
+    @blueprint.post("/api/management/telemetry/events/clear")
+    def clear_telemetry_events():
+        actor = _require_write()
+        if not isinstance(actor, User):
+            return actor
+        data = request.get_json(silent=True) or {}
+        before = int(data["before"]) if data.get("before") else None
+        try:
+            deleted = _telemetry().clear_events(before=before)
+        except ValueError as error:
+            return _error(str(error), 409)
+        _audit(
+            actor,
+            "telemetry.clear",
+            "telemetry",
+            "events",
+            {"deleted": deleted, "before": before},
+        )
+        return _no_store(jsonify({"ok": True, "deleted": deleted}))
+
+    @blueprint.get("/api/management/export/telemetry.csv")
+    def export_telemetry_csv():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        try:
+            content = _telemetry().export_csv()
+        except ValueError as error:
+            return _error(str(error), 409)
+        response = Response(content, mimetype="text/csv; charset=utf-8")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="passkey-auth-telemetry.csv"'
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @blueprint.post("/api/management/logs/<log_type>/clear")
     def clear_logs(log_type: str):
         actor = _require_write()
@@ -385,6 +607,10 @@ def create_management_blueprint() -> Blueprint:
 
 def _store() -> PasskeyStore:
     return current_app.extensions["passkey_store"]
+
+
+def _telemetry():
+    return current_app.extensions["telemetry_runtime"]
 
 
 def _current_user() -> User | None:
@@ -497,6 +723,15 @@ def _redirect_uris(value) -> list[str]:
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise ValueError("回调地址必须是完整的 HTTP 或 HTTPS URL")
     return sorted(redirect_uris)
+
+
+def _secret_update(data: dict, *, value_key: str, clear_key: str) -> str | None:
+    if bool(data.get(clear_key, False)):
+        return ""
+    if value_key not in data:
+        return None
+    value = str(data.get(value_key) or "")
+    return value if value else None
 
 
 def _export_rows(export_type: str) -> tuple[list[dict], list[str]]:

@@ -37,6 +37,7 @@ class ConfigTest(unittest.TestCase):
             "PASSKEY_HSTS_PRELOAD",
             "PASSKEY_SECURE_COOKIES",
             "PASSKEY_SERVER_TIMING_ENABLED",
+            "PASSKEY_TELEMETRY_DATABASE",
             "PASSKEY_TELEMETRY_TOKEN_URL",
             "PASSKEY_TELEMETRY_API_KEY",
             "PASSKEY_TELEMETRY_TIMEOUT_SECONDS",
@@ -85,6 +86,11 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.passkey_hsts_preload)
         self.assertFalse(config.passkey_secure_cookies)
         self.assertTrue(config.passkey_server_timing_enabled)
+        self.assertTrue(
+            config.passkey_telemetry_database.endswith(
+                "passkeys-telemetry-v1.sqlite3"
+            )
+        )
         self.assertEqual(config.passkey_telemetry_token_url, "")
         self.assertEqual(config.passkey_telemetry_api_key, "")
         self.assertEqual(config.passkey_telemetry_timeout_seconds, 1.0)
@@ -111,6 +117,7 @@ class ConfigTest(unittest.TestCase):
         os.environ["PASSKEY_HSTS_INCLUDE_SUBDOMAINS"] = "yes"
         os.environ["PASSKEY_HSTS_PRELOAD"] = "on"
         os.environ["PASSKEY_SERVER_TIMING_ENABLED"] = "false"
+        os.environ["PASSKEY_TELEMETRY_DATABASE"] = "/tmp/passkey-telemetry.sqlite3"
         os.environ["PASSKEY_TELEMETRY_TOKEN_URL"] = "http://127.0.0.1:15000/v12/key/browser-token"
         os.environ["PASSKEY_TELEMETRY_API_KEY"] = "abcd-abcd-abcd-abcd"
         os.environ["PASSKEY_TELEMETRY_TIMEOUT_SECONDS"] = "0.5"
@@ -140,6 +147,10 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(config.passkey_secure_cookies)
         self.assertFalse(config.passkey_server_timing_enabled)
         self.assertEqual(
+            config.passkey_telemetry_database,
+            "/tmp/passkey-telemetry.sqlite3",
+        )
+        self.assertEqual(
             config.passkey_telemetry_token_url,
             "http://127.0.0.1:15000/v12/key/browser-token",
         )
@@ -162,6 +173,7 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue(mapping["PASSKEY_SERVER_TIMING_ENABLED"])
         self.assertTrue(mapping["PASSKEY_HOME_AUTH_ENABLED"])
         self.assertIn("PASSKEY_TELEMETRY_TOKEN_URL", mapping)
+        self.assertIn("PASSKEY_TELEMETRY_DATABASE", mapping)
 
     def test_secure_cookie_env_can_override_https_origin_default(self) -> None:
         os.environ["PASSKEY_ORIGIN"] = "https://auth.xxxxx"

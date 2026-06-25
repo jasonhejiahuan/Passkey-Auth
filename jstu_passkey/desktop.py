@@ -24,6 +24,10 @@ def configure_desktop_environment(data_dir: Path | None = None) -> Path:
     target = data_dir or application_data_dir()
     target.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("PASSKEY_DATABASE", str(target / "passkeys-v2.sqlite3"))
+    os.environ.setdefault(
+        "PASSKEY_TELEMETRY_DATABASE",
+        str(target / "passkeys-telemetry-v1.sqlite3"),
+    )
     if not os.environ.get("FLASK_SECRET_KEY"):
         os.environ["FLASK_SECRET_KEY"] = _persistent_secret(target / "flask-secret")
     os.environ.setdefault("HOST", "127.0.0.1")

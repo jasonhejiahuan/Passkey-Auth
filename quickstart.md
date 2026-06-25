@@ -101,6 +101,7 @@ PASSKEY_REGISTRATION_ENABLED=true \
 | `PASSKEY_REGISTRATION_ENABLED` | `false` | 是否默认开放注册 |
 | `PASSKEY_REGISTRATION_UNLOCK_TTL` | `120` | 注册解锁有效期（秒） |
 | `PASSKEY_DATABASE` | 空（使用默认） | SQLite 数据库路径 |
+| `PASSKEY_TELEMETRY_DATABASE` | 空（使用默认） | 独立遥测 SQLite 数据库路径 |
 | `FLASK_SECRET_KEY` | 随机生成 | Flask session 签名密钥；生产环境请设置固定值 |
 | `PASSKEY_SERVER_API_TOKEN` | 空 | 服务端会话验证 API 的 Bearer token |
 | `PASSKEY_OAUTH_CLIENT_ID` | `jstu-passkey-client` | OAuth client ID |
@@ -115,6 +116,12 @@ PASSKEY_REGISTRATION_ENABLED=true \
 | `PASSKEY_PROXY_FIX_X_PROTO` | `1` | `X-Forwarded-Proto` 可信 hop 数 |
 | `PASSKEY_PROXY_FIX_X_HOST` | `1` | `X-Forwarded-Host` 可信 hop 数 |
 | `PASSKEY_HTTP3_ALT_SVC` | 空 | HTTP/3 Alt-Svc 响应头值 |
+
+遥测默认关闭。创建管理员并登录 `/management` 后，在“遥测”中开启总开关、
+选择默认采集能力，并按用户设置继承、关闭或自定义策略。接收端默认为内置
+Telemetry，也可选择 jason-telemetry 或自定义 HTTP POST；外部接收端可选择浏览器
+直连或服务端异步转发。关闭总开关时不会加载遥测 JS、外部适配器或遥测数据库。
+更多说明见 [遥测文档](docs/telemetry.md)。
 
 ## 用户注册
 

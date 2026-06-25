@@ -128,7 +128,9 @@ class PublicPageTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"/static/telemetry.js", response.data)
-        self.assertIn(b"data-passkey-telemetry-token-url", response.data)
+        self.assertIn(b"data-passkey-telemetry-endpoint", response.data)
+        self.assertIn(b"data-passkey-telemetry-token", response.data)
+        self.assertIn(b"data-passkey-telemetry-features", response.data)
         self.assertNotIn(b"abcd-abcd-abcd-abcd", response.data)
 
 

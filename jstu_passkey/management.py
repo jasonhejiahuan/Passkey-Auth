@@ -4,14 +4,50 @@ import csv
 import io
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, current_app, g, jsonify, render_template, request, session
-from webauthn.helpers import bytes_to_base64url
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric import ec, utils
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
+from cryptography.hazmat.primitives.hashes import SHA256
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    g,
+    jsonify,
+    render_template,
+    request,
+    session,
+    stream_with_context,
+)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from .storage import PasskeyStore, User
 from .webauthn_service import normalize_username
+
+_CHANNEL_TTL_SECONDS = 30 * 60
+_CHANNEL_STALE_SECONDS = 5 * 60
+_CHANNEL_DEFAULT_ACK_MS = 45_000
+_CHANNEL_MIN_ACK_MS = 30_000
+_CHANNEL_MAX_ACK_MS = 300_000
+_CHANNEL_REGISTRY_KEY = "management_channels"
+
+
+@dataclass
+class ManagementChannel:
+    channel_id: str
+    user_id: int
+    action_token_session_id: str
+    public_key: EllipticCurvePublicKey
+    server_nonce: str
+    last_counter: int
+    created_at: int
+    expires_at: int
+    last_seen_at: int
+    ack_after_ms: int
 
 
 def create_management_blueprint() -> Blueprint:
@@ -117,6 +153,108 @@ def create_management_blueprint() -> Blueprint:
                 }
             )
         )
+
+    @blueprint.post("/api/management/channel/start")
+    def start_channel():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        csrf_error = _require_csrf()
+        if csrf_error:
+            return csrf_error
+        recent_error = _require_recent_management_auth()
+        if recent_error:
+            return recent_error
+        action_token_session_id = str(session.get("action_token_session_id") or "")
+        if not action_token_session_id:
+            return _action_token_error("action_token_missing")
+        data = request.get_json(force=True)
+        try:
+            public_key = _public_key_from_jwk(data.get("publicKeyJwk"))
+        except ValueError as error:
+            return _error(str(error), 400)
+        now = int(time.time())
+        channel = ManagementChannel(
+            channel_id=secrets.token_urlsafe(24),
+            user_id=actor.id,
+            action_token_session_id=action_token_session_id,
+            public_key=public_key,
+            server_nonce=secrets.token_urlsafe(24),
+            last_counter=0,
+            created_at=now,
+            expires_at=now + _CHANNEL_TTL_SECONDS,
+            last_seen_at=now,
+            ack_after_ms=_CHANNEL_DEFAULT_ACK_MS,
+        )
+        registry = _channels()
+        _prune_channels(registry, now=now)
+        registry[channel.channel_id] = channel
+        session["management_channel_id"] = channel.channel_id
+        return _no_store(jsonify({"ok": True, **_channel_payload(channel)}))
+
+    @blueprint.get("/api/management/channel/events")
+    def channel_events():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        channel = _session_channel(actor)
+        if not channel:
+            return _channel_error("channel_missing", 409)
+
+        @stream_with_context
+        def stream():
+            while True:
+                current = _channels().get(channel.channel_id)
+                now = int(time.time())
+                if not current or current.expires_at <= now:
+                    yield _sse_event(
+                        "reauth",
+                        {
+                            "ok": False,
+                            "reason": "channel_expired",
+                            "reauth_required": True,
+                        },
+                    )
+                    break
+                current.server_nonce = secrets.token_urlsafe(24)
+                yield _sse_event("challenge", _channel_payload(current))
+                time.sleep(max(5, min(current.ack_after_ms, _CHANNEL_MAX_ACK_MS) / 1000))
+
+        response = Response(stream(), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-store, no-transform"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
+
+    @blueprint.post("/api/management/channel/ack")
+    def acknowledge_channel():
+        actor = _require_admin()
+        if not isinstance(actor, User):
+            return actor
+        csrf_error = _require_csrf()
+        if csrf_error:
+            return csrf_error
+        data = request.get_json(force=True)
+        channel = _session_channel(actor, channel_id=str(data.get("channelId") or ""))
+        if not channel:
+            return _channel_error("channel_missing", 409)
+        result = _verify_channel_proof(
+            channel=channel,
+            purpose="ack",
+            method="POST",
+            path="/api/management/channel/ack",
+            counter=data.get("counter"),
+            client_nonce=str(data.get("clientNonce") or ""),
+            signature=str(data.get("signature") or ""),
+            visibility=str(data.get("visibility") or "unknown"),
+            effective_type=str(data.get("effectiveType") or "unknown"),
+            save_data=bool(data.get("saveData", False)),
+            rtt_ms=data.get("rttMs"),
+        )
+        if result:
+            return result
+        channel.ack_after_ms = _adaptive_ack_ms(data)
+        channel.last_seen_at = int(time.time())
+        return _no_store(jsonify({"ok": True, **_channel_payload(channel)}))
 
     @blueprint.patch("/api/management/users/<int:user_id>")
     def update_user(user_id: int):
@@ -650,6 +788,33 @@ def _require_write():
     reauthenticated_at = int(session.get("management_reauthenticated_at") or 0)
     if reauthenticated_at < int(time.time()) - 300:
         return _error("请重新完成 Passkey 登录后再执行此操作", 428)
+    channel_id = str(session.get("management_channel_id") or "")
+    if channel_id:
+        channel = _session_channel(user, channel_id=channel_id)
+        if not channel:
+            return _channel_error("channel_missing", 409)
+        if channel.last_seen_at < int(time.time()) - _CHANNEL_STALE_SECONDS:
+            return _channel_error("channel_stale", 409)
+        if request.headers.get("X-Management-Channel-Id", "") != channel.channel_id:
+            return _channel_error("channel_proof_missing", 409)
+        channel_error = _verify_channel_proof(
+            channel=channel,
+            purpose="write",
+            method=request.method,
+            path=request.path,
+            counter=request.headers.get("X-Management-Channel-Counter"),
+            client_nonce=request.headers.get("X-Management-Channel-Client-Nonce", ""),
+            signature=request.headers.get("X-Management-Channel-Signature", ""),
+            visibility=request.headers.get("X-Management-Channel-Visibility", "unknown"),
+            effective_type=request.headers.get(
+                "X-Management-Channel-Effective-Type",
+                "unknown",
+            ),
+            save_data=request.headers.get("X-Management-Channel-Save-Data") == "1",
+            rtt_ms=None,
+        )
+        if channel_error:
+            return channel_error
     session_id = str(session.get("action_token_session_id") or "")
     provided = request.headers.get("X-Action-Token", "")
     if not session_id or not provided:
@@ -675,6 +840,187 @@ def _require_csrf():
     if not expected or not secrets.compare_digest(str(expected), provided):
         return _error("CSRF 校验失败", 403)
     return None
+
+
+def _require_recent_management_auth():
+    reauthenticated_at = int(session.get("management_reauthenticated_at") or 0)
+    if reauthenticated_at < int(time.time()) - 300:
+        return _error("请重新完成 Passkey 登录后再执行此操作", 428)
+    return None
+
+
+def _channels() -> dict[str, ManagementChannel]:
+    return current_app.extensions.setdefault(_CHANNEL_REGISTRY_KEY, {})
+
+
+def _prune_channels(
+    registry: dict[str, ManagementChannel],
+    *,
+    now: int,
+) -> None:
+    for channel_id, channel in list(registry.items()):
+        if channel.expires_at <= now:
+            registry.pop(channel_id, None)
+
+
+def _session_channel(
+    user: User,
+    *,
+    channel_id: str | None = None,
+) -> ManagementChannel | None:
+    expected_id = channel_id or str(session.get("management_channel_id") or "")
+    channel = _channels().get(expected_id)
+    now = int(time.time())
+    if not channel or channel.expires_at <= now:
+        _channels().pop(expected_id, None)
+        session.pop("management_channel_id", None)
+        return None
+    if (
+        channel.user_id != user.id
+        or channel.action_token_session_id != str(session.get("action_token_session_id") or "")
+    ):
+        return None
+    return channel
+
+
+def _channel_payload(channel: ManagementChannel) -> dict:
+    return {
+        "channel_id": channel.channel_id,
+        "server_nonce": channel.server_nonce,
+        "ack_after_ms": channel.ack_after_ms,
+        "min_ack_after_ms": _CHANNEL_MIN_ACK_MS,
+        "max_ack_after_ms": _CHANNEL_MAX_ACK_MS,
+        "expires_at": channel.expires_at,
+        "last_seen_at": channel.last_seen_at,
+    }
+
+
+def _public_key_from_jwk(value) -> EllipticCurvePublicKey:
+    if not isinstance(value, dict):
+        raise ValueError("通道公钥无效")
+    if value.get("kty") != "EC" or value.get("crv") != "P-256":
+        raise ValueError("通道公钥必须使用 P-256 ECDSA")
+    try:
+        x = int.from_bytes(base64url_to_bytes(str(value["x"])), "big")
+        y = int.from_bytes(base64url_to_bytes(str(value["y"])), "big")
+        return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+    except Exception as exc:
+        raise ValueError("通道公钥无效") from exc
+
+
+def _verify_channel_proof(
+    *,
+    channel: ManagementChannel,
+    purpose: str,
+    method: str,
+    path: str,
+    counter,
+    client_nonce: str,
+    signature: str,
+    visibility: str,
+    effective_type: str,
+    save_data: bool,
+    rtt_ms,
+):
+    try:
+        counter_value = int(counter)
+    except (TypeError, ValueError):
+        return _channel_error("channel_counter_invalid", 409)
+    if counter_value <= channel.last_counter:
+        return _channel_error("channel_replay", 409)
+    if not client_nonce or not signature:
+        return _channel_error("channel_proof_missing", 409)
+    message = _channel_message(
+        purpose=purpose,
+        channel_id=channel.channel_id,
+        counter=counter_value,
+        server_nonce=channel.server_nonce,
+        client_nonce=client_nonce,
+        method=method,
+        path=path,
+        visibility=visibility,
+        effective_type=effective_type,
+        save_data=save_data,
+        rtt_ms=rtt_ms,
+    )
+    try:
+        channel.public_key.verify(
+            _ecdsa_signature_bytes(signature),
+            message.encode("utf-8"),
+            ec.ECDSA(SHA256()),
+        )
+    except (InvalidSignature, ValueError):
+        return _channel_error("channel_signature_invalid", 409)
+    channel.last_counter = counter_value
+    channel.last_seen_at = int(time.time())
+    return None
+
+
+def _channel_message(
+    *,
+    purpose: str,
+    channel_id: str,
+    counter: int,
+    server_nonce: str,
+    client_nonce: str,
+    method: str,
+    path: str,
+    visibility: str,
+    effective_type: str,
+    save_data: bool,
+    rtt_ms,
+) -> str:
+    rtt_value = "" if rtt_ms is None else str(int(rtt_ms))
+    return "\n".join(
+        [
+            "passkey-management-channel-v1",
+            purpose,
+            channel_id,
+            str(counter),
+            server_nonce,
+            client_nonce,
+            method.upper(),
+            path,
+            visibility,
+            effective_type,
+            "1" if save_data else "0",
+            rtt_value,
+        ]
+    )
+
+
+def _ecdsa_signature_bytes(value: str) -> bytes:
+    signature = base64url_to_bytes(value)
+    if len(signature) != 64:
+        return signature
+    r = int.from_bytes(signature[:32], "big")
+    s = int.from_bytes(signature[32:], "big")
+    return utils.encode_dss_signature(r, s)
+
+
+def _adaptive_ack_ms(data: dict) -> int:
+    visibility = str(data.get("visibility") or "unknown")
+    effective_type = str(data.get("effectiveType") or "unknown")
+    save_data = bool(data.get("saveData", False))
+    try:
+        rtt_ms = int(data.get("rttMs") or 0)
+    except (TypeError, ValueError):
+        rtt_ms = 0
+    if visibility != "visible":
+        interval = 180_000
+    elif save_data:
+        interval = 180_000
+    elif effective_type in {"slow-2g", "2g"}:
+        interval = 120_000
+    elif effective_type == "3g" or rtt_ms > 1500:
+        interval = 90_000
+    else:
+        interval = _CHANNEL_DEFAULT_ACK_MS
+    return max(_CHANNEL_MIN_ACK_MS, min(interval, _CHANNEL_MAX_ACK_MS))
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {current_app.json.dumps(payload)}\n\n"
 
 
 def _audit(
@@ -834,6 +1180,22 @@ def _action_token_error(reason: str):
                 }
             ),
             409,
+        )
+    )
+
+
+def _channel_error(reason: str, status: int):
+    return _no_store(
+        (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "管理通道已失效，请重新完成 Passkey 验证",
+                    "reauth_required": True,
+                    "reason": reason,
+                }
+            ),
+            status,
         )
     )
 

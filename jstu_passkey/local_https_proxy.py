@@ -31,15 +31,17 @@ _HOP_BY_HOP_HEADERS = {
 }
 
 
-def _configure_modern_tls(context: ssl.SSLContext) -> None:
+def _modern_tls_context() -> ssl.SSLContext:
     if not getattr(ssl, "HAS_TLSv1_3", False):
         raise RuntimeError(
             "local HTTPS proxy requires TLS 1.3 support from Python/OpenSSL. "
             "Use a recent Python build and a modern Chrome browser."
         )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
     context.maximum_version = ssl.TLSVersion.TLSv1_3
     context.options |= ssl.OP_NO_COMPRESSION
+    return context
 
 
 def detect_lan_ip() -> str:
@@ -228,8 +230,7 @@ def run_proxy(
 ) -> None:
     handler = _proxy_handler(backend_host=backend_host, backend_port=backend_port)
     server = ThreadingHTTPServer((bind_host, https_port), handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    _configure_modern_tls(context)
+    context = _modern_tls_context()
     context.load_cert_chain(certfile=cert_path, keyfile=key_path)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     try:

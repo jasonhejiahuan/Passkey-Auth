@@ -58,7 +58,40 @@ PASSKEY_ORIGIN=http://<YOUR_LOCAL_IP>:5003 \
 
 **重要**：`PASSKEY_ORIGIN` 必须与浏览器实际访问的 URL 完全一致（用于 WebAuthn 安全验证）。
 
-### 场景 4：HTTPS 反向代理部署
+### 场景 4：本地 HTTPS 反向代理（局域网 / 手机测试）
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy
+```
+
+启动器会自动检测本机局域网 IP，生成自签名证书，并输出可访问的
+`https://<YOUR_HOSTNAME>.local:5443` origin。后端 Flask 服务仍只监听
+`127.0.0.1:5003`，HTTPS 代理会转发到后端，并在启动输出里显示检测到的局域网 IP。
+代理会设置：
+
+- `PASSKEY_ORIGIN=https://<YOUR_HOSTNAME>.local:5443`
+- `PASSKEY_TRUST_PROXY_HEADERS=true`
+- `PASSKEY_SECURE_COOKIES=true`
+- `PASSKEY_HSTS_MAX_AGE_SECONDS=0`
+
+创建首个管理员时也可以直接走 HTTPS 反代：
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy --reregister-admin qpwoeiruty
+```
+
+如果自动检测的 `.local` 主机名不适合当前网络，或你希望使用 hosts / 本地域名：
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy \
+  --origin https://passkey.local:5443
+```
+
+浏览器会提示自签名证书不受信任，这是本地测试的预期行为。WebAuthn 不接受裸 IP 作为
+Passkey RP ID；如果显式传入 `https://<IP>:5443`，启动器会拒绝启动。请确保地址栏
+origin、证书 SAN 和 `PASSKEY_RP_ID` 指向同一个域名。
+
+### 场景 5：HTTPS 反向代理部署
 
 ```bash
 PORT=5003 \
@@ -71,7 +104,7 @@ PASSKEY_PROXY_FIX_X_PROTO=1 \
 - `PASSKEY_TRUST_PROXY_HEADERS=true`：信任反向代理注入的 `X-Forwarded-*` 头
 - `PASSKEY_PROXY_FIX_X_*`：代理链中可信 hop 数（通常为 1）
 
-### 场景 5：自定义数据库路径
+### 场景 6：自定义数据库路径
 
 ```bash
 PASSKEY_DATABASE=/path/to/custom.sqlite3 \
@@ -80,7 +113,7 @@ PASSKEY_DATABASE=/path/to/custom.sqlite3 \
 
 默认数据库位置：`instance/passkeys-v2.sqlite3`
 
-### 场景 6：测试模式（启用注册）
+### 场景 7：测试模式（启用注册）
 
 ```bash
 PORT=5003 \

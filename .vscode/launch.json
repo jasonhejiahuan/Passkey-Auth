@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Passkey Auth: Local HTTPS Proxy",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "jstu_passkey.local_https_proxy",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "env": {
+        "FLASK_DEBUG": "false"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "Passkey-Auth local HTTPS origin: (https://[^\\s]+)",
+        "uriFormat": "%s"
+      }
+    },
+    {
+      "name": "Passkey Auth: Local Server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "jstu_passkey.app",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "FLASK_DEBUG": "false",
+        "HOST": "127.0.0.1",
+        "PORT": "5003",
+        "PASSKEY_ORIGIN": "http://localhost:5003"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\* Running on http://127.0.0.1:([0-9]+)",
+        "uriFormat": "http://localhost:%s"
+      }
+    }
+  ]
+}

@@ -119,6 +119,15 @@ browser HTML. Browser-direct jason-telemetry delivery receives only a one-time
 collection URL. Custom browser-direct delivery cannot use private Bearer/header
 credentials; authenticated custom endpoints must use server relay.
 
+When the browser supports it, the Management UI also opens a same-origin
+Server-Sent Events channel and binds the current page to a temporary P-256
+WebCrypto key. The channel exchanges signed ACKs, page visibility, and network
+hints so the server can reject replayed Management writes after the channel is
+active and stretch the interval for background or constrained clients. This
+channel is only an additional page-possession signal; it is never accepted in
+place of Passkey authentication, CSRF, the admin session, or the rotating
+action token.
+
 Jason Telemetry v13 automatic pairing uses a short-lived, one-use pairing code,
 two independent nonces, and HMAC challenge-response. Pairing requires HTTPS
 except on loopback. The generated API key is returned once over the server-to-

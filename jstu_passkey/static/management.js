@@ -12,6 +12,15 @@ let telemetryState = null;
 let telemetryLoaded = false;
 let settingsSaveChain = Promise.resolve();
 let statusTimer = null;
+let managementChannel = {
+  active: false,
+  channelId: "",
+  keyPair: null,
+  counter: 0,
+  serverNonce: "",
+  eventSource: null,
+  ackTimer: null,
+};
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
@@ -34,6 +43,7 @@ document.querySelectorAll("[data-clear-log]").forEach((button) => {
 });
 showViewFromHash();
 loadOverview();
+void startManagementChannel();
 
 async function loadOverview() {
   try {
@@ -1036,6 +1046,13 @@ async function requestJson(url, options = {}) {
   ) {
     init.headers["X-Action-Token"] = actionToken;
   }
+  if (
+    init.method !== "GET" &&
+    url.startsWith("/api/management/") &&
+    !url.startsWith("/api/management/channel/")
+  ) {
+    Object.assign(init.headers, await managementChannelHeaders("write", init.method, url));
+  }
   if (options.body !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(options.body);
@@ -1063,6 +1080,250 @@ async function requestJson(url, options = {}) {
   }
   return data;
 }
+
+async function startManagementChannel() {
+  if (
+    managementChannel.active ||
+    !window.crypto ||
+    !window.crypto.subtle ||
+    typeof window.EventSource !== "function"
+  ) {
+    return;
+  }
+  try {
+    const exportableKeyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "ECDSA",
+        namedCurve: "P-256",
+      },
+      true,
+      ["sign", "verify"],
+    );
+    const publicKeyJwk = await window.crypto.subtle.exportKey("jwk", exportableKeyPair.publicKey);
+    const privateKeyJwk = await window.crypto.subtle.exportKey("jwk", exportableKeyPair.privateKey);
+    const privateKey = await window.crypto.subtle.importKey(
+      "jwk",
+      privateKeyJwk,
+      {
+        name: "ECDSA",
+        namedCurve: "P-256",
+      },
+      false,
+      ["sign"],
+    );
+    const started = await requestJson("/api/management/channel/start", {
+      method: "POST",
+      body: { publicKeyJwk },
+      skipReauth: true,
+    });
+    managementChannel = {
+      active: true,
+      channelId: started.channel_id,
+      keyPair: { privateKey },
+      counter: 0,
+      serverNonce: started.server_nonce,
+      eventSource: null,
+      ackTimer: null,
+    };
+    openManagementChannelEvents();
+    scheduleManagementChannelAck(250);
+  } catch (_error) {
+    stopManagementChannel();
+  }
+}
+
+function openManagementChannelEvents() {
+  if (!managementChannel.active || managementChannel.eventSource) return;
+  const events = new EventSource(
+    `/api/management/channel/events?channel_id=${encodeURIComponent(
+      managementChannel.channelId,
+    )}`,
+  );
+  managementChannel.eventSource = events;
+  events.addEventListener("challenge", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      managementChannel.serverNonce = payload.server_nonce || managementChannel.serverNonce;
+      scheduleManagementChannelAck(250);
+    } catch (_error) {
+      stopManagementChannel();
+    }
+  });
+  events.addEventListener("reauth", () => {
+    stopManagementChannel();
+    actionToken = "";
+    window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const query = new URLSearchParams({ mode: "reauth", return_to: returnTo });
+    window.location.assign(`/auth/passkey?${query}`);
+  });
+  events.onerror = () => {
+    scheduleManagementChannelAck(nextAckDelay());
+  };
+}
+
+function scheduleManagementChannelAck(delayMs) {
+  if (!managementChannel.active) return;
+  window.clearTimeout(managementChannel.ackTimer);
+  managementChannel.ackTimer = window.setTimeout(() => {
+    void sendManagementChannelAck();
+  }, Math.max(250, delayMs));
+}
+
+async function sendManagementChannelAck() {
+  if (!managementChannel.active || !managementChannel.serverNonce) return;
+  const startedAt = performance.now();
+  const network = networkHints();
+  try {
+    const body = await signedChannelPayload({
+      purpose: "ack",
+      method: "POST",
+      path: "/api/management/channel/ack",
+      visibility: document.visibilityState || "unknown",
+      effectiveType: network.effectiveType,
+      saveData: network.saveData,
+      rttMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    });
+    const response = await fetch("/api/management/channel/ack", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify(body),
+      keepalive: true,
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      if (response.status === 428 || data.reauth_required) {
+        stopManagementChannel();
+      }
+      return;
+    }
+    managementChannel.serverNonce = data.server_nonce || managementChannel.serverNonce;
+    scheduleManagementChannelAck(data.ack_after_ms || nextAckDelay());
+  } catch (_error) {
+    scheduleManagementChannelAck(nextAckDelay());
+  }
+}
+
+async function managementChannelHeaders(purpose, method, url) {
+  if (!managementChannel.active || !managementChannel.serverNonce) return {};
+  const path = new URL(url, window.location.origin).pathname;
+  const network = networkHints();
+  try {
+    const payload = await signedChannelPayload({
+      purpose,
+      method,
+      path,
+      visibility: document.visibilityState || "unknown",
+      effectiveType: network.effectiveType,
+      saveData: network.saveData,
+      rttMs: "",
+    });
+    return {
+      "X-Management-Channel-Id": payload.channelId,
+      "X-Management-Channel-Counter": String(payload.counter),
+      "X-Management-Channel-Client-Nonce": payload.clientNonce,
+      "X-Management-Channel-Signature": payload.signature,
+      "X-Management-Channel-Visibility": payload.visibility,
+      "X-Management-Channel-Effective-Type": payload.effectiveType,
+      "X-Management-Channel-Save-Data": payload.saveData ? "1" : "0",
+    };
+  } catch (_error) {
+    return {};
+  }
+}
+
+async function signedChannelPayload({
+  purpose,
+  method,
+  path,
+  visibility,
+  effectiveType,
+  saveData,
+  rttMs,
+}) {
+  const counter = managementChannel.counter + 1;
+  managementChannel.counter = counter;
+  const clientNonce = base64Url(window.crypto.getRandomValues(new Uint8Array(18)));
+  const message = [
+    "passkey-management-channel-v1",
+    purpose,
+    managementChannel.channelId,
+    String(counter),
+    managementChannel.serverNonce,
+    clientNonce,
+    method.toUpperCase(),
+    path,
+    visibility,
+    effectiveType,
+    saveData ? "1" : "0",
+    rttMs === "" ? "" : String(Math.round(rttMs)),
+  ].join("\n");
+  const signature = await window.crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    managementChannel.keyPair.privateKey,
+    new TextEncoder().encode(message),
+  );
+  return {
+    channelId: managementChannel.channelId,
+    counter,
+    clientNonce,
+    signature: base64Url(new Uint8Array(signature)),
+    visibility,
+    effectiveType,
+    saveData,
+    rttMs: rttMs === "" ? null : Math.round(rttMs),
+  };
+}
+
+function nextAckDelay() {
+  const network = networkHints();
+  if (document.visibilityState !== "visible") return 180000;
+  if (network.saveData) return 180000;
+  if (network.effectiveType === "slow-2g" || network.effectiveType === "2g") return 120000;
+  if (network.effectiveType === "3g") return 90000;
+  return 45000;
+}
+
+function networkHints() {
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  return {
+    effectiveType: connection && connection.effectiveType ? connection.effectiveType : "unknown",
+    saveData: Boolean(connection && connection.saveData),
+  };
+}
+
+function stopManagementChannel() {
+  window.clearTimeout(managementChannel.ackTimer);
+  if (managementChannel.eventSource) managementChannel.eventSource.close();
+  managementChannel = {
+    active: false,
+    channelId: "",
+    keyPair: null,
+    counter: 0,
+    serverNonce: "",
+    eventSource: null,
+    ackTimer: null,
+  };
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return window.btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!managementChannel.active) return;
+  scheduleManagementChannelAck(document.visibilityState === "visible" ? 250 : nextAckDelay());
+});
 
 function renderList(selector, items, renderer) {
   document.querySelector(selector).innerHTML = items.length

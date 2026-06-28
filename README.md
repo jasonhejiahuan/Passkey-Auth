@@ -116,6 +116,14 @@ http://localhost:5003/management
 中返回 `next_action_token`，旧 token 立即失效；缺失或重放旧 token 会要求重新完成
 Passkey 验证。只读 GET 接口不受影响。
 
+Management UI 还会在支持 WebCrypto 和 Server-Sent Events 的浏览器里建立一个轻量
+管理通道：当前页面生成临时 P-256 签名密钥，服务端通过 SSE 推送 nonce 和推荐
+ACK 间隔，浏览器回传签名 ACK、页面前后台状态和网络提示。通道启动后，同一
+Session 的管理写入还必须带 `X-Management-Channel-*` 签名 proof；服务端用单调
+counter 拒绝重放，并按前后台、低速网络或省流量模式自动放宽心跳间隔。该通道只
+证明当前页面仍持有临时私钥和最近 nonce，不替代 Passkey、CSRF、Session 或
+`X-Action-Token`。
+
 CSV 使用 UTF-8 BOM 和稳定英文列名，不包含 credential 公钥、Client Secret
 hash、session 或 token。登录历史包含原始 IP 和完整 User-Agent，应按部署地的隐私要求使用。
 
@@ -144,6 +152,32 @@ PORT=5001 PASSKEY_ORIGIN=http://localhost:5001 .venv/bin/python -m jstu_passkey.
 未设置 `PASSKEY_ORIGIN` 时，服务会自动使用当前请求地址，例如 `http://localhost:5002`。
 
 Passkey / WebAuthn 要求安全上下文。`localhost` 属于浏览器允许的安全上下文；如果部署到线上，请使用 HTTPS，并把 `PASSKEY_RP_ID` 和 `PASSKEY_ORIGIN` 改成你的真实域名。
+
+如果要用手机或其他局域网设备测试本机服务，可启动内置本地 HTTPS 反向代理：
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy
+```
+
+该命令会自动检测本机局域网 IP，生成自签名证书，并用
+`https://<YOUR_HOSTNAME>.local:5443` 作为 `PASSKEY_ORIGIN`。Flask 后端仍只监听
+`127.0.0.1:5003`，HTTPS 代理会注入可信 `X-Forwarded-*` 头，并在启动输出里显示检测到的
+局域网 IP 方便排查网络。浏览器首次访问会提示证书不受信任，这是自签名证书的预期行为；
+证书和私钥保存在系统用户数据目录，不会写入仓库。
+
+如需创建管理员，也可以直接把一次性 token 传给 HTTPS 反代启动器：
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy --reregister-admin qpwoeiruty
+```
+
+如果自动检测到的 `.local` 主机名不适合当前网络，可显式指定 origin。WebAuthn 不接受裸
+IP 作为 Passkey RP ID，因此这里必须使用本地域名、mDNS 主机名或 hosts / DNS 记录：
+
+```bash
+.venv/bin/python -m jstu_passkey.local_https_proxy \
+  --origin https://passkey.local:5443
+```
 
 ## 环境变量
 

@@ -8,9 +8,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.hashes import SHA256
+from webauthn.helpers import bytes_to_base64url
+
 from jstu_passkey.app import create_app
 from jstu_passkey.storage import PasskeyStore
-from webauthn.helpers import bytes_to_base64url
 
 
 class ManagementTest(unittest.TestCase):
@@ -71,6 +74,92 @@ class ManagementTest(unittest.TestCase):
             "X-Action-Token": self.action_token
             if action_token is None
             else action_token,
+        }
+
+    def channel_keypair(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        numbers = private_key.public_key().public_numbers()
+        public_jwk = {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": bytes_to_base64url(numbers.x.to_bytes(32, "big")),
+            "y": bytes_to_base64url(numbers.y.to_bytes(32, "big")),
+        }
+        return private_key, public_jwk
+
+    def start_channel(self):
+        private_key, public_jwk = self.channel_keypair()
+        response = self.client.post(
+            "/api/management/channel/start",
+            json={"publicKeyJwk": public_jwk},
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        self.assertEqual(response.status_code, 200)
+        return private_key, response.get_json()
+
+    def sign_channel(
+        self,
+        private_key,
+        *,
+        purpose: str,
+        channel_id: str,
+        counter: int,
+        server_nonce: str,
+        client_nonce: str = "client-nonce",
+        method: str = "POST",
+        path: str = "/api/management/channel/ack",
+        visibility: str = "visible",
+        effective_type: str = "4g",
+        save_data: bool = False,
+        rtt_ms: int | None = None,
+    ) -> str:
+        message = "\n".join(
+            [
+                "passkey-management-channel-v1",
+                purpose,
+                channel_id,
+                str(counter),
+                server_nonce,
+                client_nonce,
+                method.upper(),
+                path,
+                visibility,
+                effective_type,
+                "1" if save_data else "0",
+                "" if rtt_ms is None else str(rtt_ms),
+            ]
+        )
+        return bytes_to_base64url(
+            private_key.sign(message.encode("utf-8"), ec.ECDSA(SHA256()))
+        )
+
+    def channel_headers(
+        self,
+        private_key,
+        payload: dict,
+        *,
+        counter: int = 1,
+        method: str = "PATCH",
+        path: str = "/api/management/settings/registration",
+    ) -> dict[str, str]:
+        client_nonce = f"write-nonce-{counter}"
+        return {
+            "X-Management-Channel-Id": payload["channel_id"],
+            "X-Management-Channel-Counter": str(counter),
+            "X-Management-Channel-Client-Nonce": client_nonce,
+            "X-Management-Channel-Signature": self.sign_channel(
+                private_key,
+                purpose="write",
+                channel_id=payload["channel_id"],
+                counter=counter,
+                server_nonce=payload["server_nonce"],
+                client_nonce=client_nonce,
+                method=method,
+                path=path,
+            ),
+            "X-Management-Channel-Visibility": "visible",
+            "X-Management-Channel-Effective-Type": "4g",
+            "X-Management-Channel-Save-Data": "0",
         }
 
     def test_management_requires_admin(self) -> None:
@@ -167,6 +256,9 @@ class ManagementTest(unittest.TestCase):
         self.assertIn("loadTelemetry", body)
         self.assertIn("data-telemetry-user-mode", body)
         self.assertIn("10000", body)
+        self.assertIn("startManagementChannel", body)
+        self.assertIn("EventSource", body)
+        self.assertIn("X-Management-Channel-Signature", body)
 
     def test_telemetry_configuration_does_not_stick_over_user_policies(self) -> None:
         css = self.client.get("/static/management.css").get_data(as_text=True)
@@ -393,6 +485,105 @@ class ManagementTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
         self.assertNotIn("next_action_token", response.get_json())
+
+    def test_management_channel_start_requires_csrf(self) -> None:
+        _private_key, public_jwk = self.channel_keypair()
+
+        response = self.client.post(
+            "/api/management/channel/start",
+            json={"publicKeyJwk": public_jwk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "CSRF 校验失败")
+
+    def test_management_channel_ack_rejects_replay(self) -> None:
+        private_key, payload = self.start_channel()
+        signature = self.sign_channel(
+            private_key,
+            purpose="ack",
+            channel_id=payload["channel_id"],
+            counter=1,
+            server_nonce=payload["server_nonce"],
+            rtt_ms=120,
+        )
+        body = {
+            "channelId": payload["channel_id"],
+            "counter": 1,
+            "serverNonce": payload["server_nonce"],
+            "clientNonce": "client-nonce",
+            "visibility": "visible",
+            "effectiveType": "4g",
+            "saveData": False,
+            "rttMs": 120,
+            "signature": signature,
+        }
+
+        response = self.client.post(
+            "/api/management/channel/ack",
+            json=body,
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["ack_after_ms"], 45000)
+
+        replay = self.client.post(
+            "/api/management/channel/ack",
+            json=body,
+            headers={"X-CSRF-Token": "csrf-token"},
+        )
+        self.assertEqual(replay.status_code, 409)
+        self.assertEqual(replay.get_json()["reason"], "channel_replay")
+
+    def test_management_channel_sse_emits_challenge(self) -> None:
+        _private_key, payload = self.start_channel()
+
+        response = self.client.get(
+            f"/api/management/channel/events?channel_id={payload['channel_id']}",
+            buffered=False,
+        )
+        try:
+            chunk = next(response.response).decode("utf-8")
+        finally:
+            response.close()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "text/event-stream")
+        self.assertIn("event: challenge", chunk)
+        self.assertIn('"server_nonce"', chunk)
+
+    def test_channel_started_write_requires_signed_channel_proof(self) -> None:
+        private_key, payload = self.start_channel()
+
+        missing_proof = self.client.patch(
+            "/api/management/settings/registration",
+            json={
+                "mode": "open",
+                "enabledUntil": None,
+                "defaultDemoAllowed": True,
+            },
+            headers=self.write_headers(),
+        )
+        self.assertEqual(missing_proof.status_code, 409)
+        self.assertEqual(missing_proof.get_json()["reason"], "channel_proof_missing")
+
+        headers = {
+            **self.write_headers(),
+            **self.channel_headers(private_key, payload),
+        }
+        response = self.client.patch(
+            "/api/management/settings/registration",
+            json={
+                "mode": "open",
+                "enabledUntil": None,
+                "defaultDemoAllowed": True,
+            },
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["next_action_token"])
+        self.assertEqual(self.store.get_registration_settings().mode, "open")
 
     def test_other_admin_can_be_removed_when_an_admin_remains(self) -> None:
         other = self.store.create_user("operator", b"b" * 32)

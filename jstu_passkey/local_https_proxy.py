@@ -31,6 +31,17 @@ _HOP_BY_HOP_HEADERS = {
 }
 
 
+def _configure_modern_tls(context: ssl.SSLContext) -> None:
+    if not getattr(ssl, "HAS_TLSv1_3", False):
+        raise RuntimeError(
+            "local HTTPS proxy requires TLS 1.3 support from Python/OpenSSL. "
+            "Use a recent Python build and a modern Chrome browser."
+        )
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    context.options |= ssl.OP_NO_COMPRESSION
+
+
 def detect_lan_ip() -> str:
     """Return the address most likely to be reachable from the local network."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -218,6 +229,7 @@ def run_proxy(
     handler = _proxy_handler(backend_host=backend_host, backend_port=backend_port)
     server = ThreadingHTTPServer((bind_host, https_port), handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    _configure_modern_tls(context)
     context.load_cert_chain(certfile=cert_path, keyfile=key_path)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     try:
@@ -438,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
             cert_path=cert_path,
             key_path=key_path,
         )
+    except RuntimeError as error:
+        print(f"Local HTTPS proxy TLS setup failed: {error}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         return 0
     finally:

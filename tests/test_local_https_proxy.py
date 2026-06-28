@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from jstu_passkey.local_https_proxy import (
+    _configure_modern_tls,
     _forward_headers,
     _subject_alt_names,
     build_backend_environment,
@@ -20,6 +22,22 @@ from jstu_passkey.local_https_proxy import (
 
 
 class LocalHttpsProxyTest(unittest.TestCase):
+    def test_modern_tls_policy_requires_tls13_only(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+        _configure_modern_tls(context)
+
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_3)
+        self.assertEqual(context.maximum_version, ssl.TLSVersion.TLSv1_3)
+        self.assertTrue(context.options & ssl.OP_NO_COMPRESSION)
+
+    @patch("jstu_passkey.local_https_proxy.ssl.HAS_TLSv1_3", False)
+    def test_modern_tls_policy_reports_unsupported_runtime(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+        with self.assertRaisesRegex(RuntimeError, "requires TLS 1.3"):
+            _configure_modern_tls(context)
+
     def test_default_origin_formats_ipv4_and_ipv6_hosts(self) -> None:
         self.assertEqual(
             default_origin("192.168.1.23", 5443),

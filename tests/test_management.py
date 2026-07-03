@@ -214,6 +214,10 @@ class ManagementTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        self.assertIn('data-view="overview"', body)
+        self.assertIn('id="overview-summary"', body)
+        self.assertIn('id="overview-login-chart"', body)
+        self.assertIn("运行状态", body)
         self.assertIn('id="logout-button"', body)
         self.assertIn("退出登录", body)
         self.assertIn('class="toggle-row"', body)
@@ -247,8 +251,12 @@ class ManagementTest(unittest.TestCase):
         self.assertIn('class="toggle-control"', body)
         self.assertIn('window.addEventListener("hashchange", showViewFromHash)', body)
         self.assertIn("window.location.hash.slice(1)", body)
+        self.assertIn('window.location.hash.slice(1) || "overview"', body)
         self.assertIn("window.history.pushState", body)
         self.assertIn("window.history.replaceState", body)
+        self.assertIn("renderInteractiveChart", body)
+        self.assertIn("overviewFilter", body)
+        self.assertIn("telemetryFilter", body)
         self.assertIn('data-user-agent="${index}"', body)
         self.assertIn('openDetail("User-Agent"', body)
         self.assertIn('data-audit-detail="${index}"', body)
@@ -485,6 +493,91 @@ class ManagementTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
         self.assertNotIn("next_action_token", response.get_json())
+
+    def test_management_overview_exposes_summary_and_chart_data(self) -> None:
+        member = self.store.create_user("member", b"m" * 32)
+        self.store.save_credential(
+            user_id=member.id,
+            credential_id=b"member-credential",
+            public_key=b"public-key",
+            sign_count=0,
+            transports=["internal"],
+            aaguid=None,
+            credential_type="public-key",
+            device_type="multi_device",
+            backed_up=True,
+        )
+        self.store.create_oauth_client(
+            client_id="enabled-client",
+            name="Enabled Client",
+            client_secret="secret",
+            redirect_uris=["https://enabled.example/callback"],
+        )
+        self.store.create_oauth_client(
+            client_id="disabled-client",
+            name="Disabled Client",
+            client_secret="secret",
+            redirect_uris=["https://disabled.example/callback"],
+        )
+        self.store.update_oauth_client(
+            "disabled-client",
+            name="Disabled Client",
+            redirect_uris=["https://disabled.example/callback"],
+            enabled=False,
+        )
+        self.store.record_login(
+            user=self.admin,
+            client_id=None,
+            flow="passkey",
+            result="success",
+            credential_hint=None,
+            ip_address="127.0.0.1",
+            user_agent="test",
+            sub="sub",
+        )
+        self.store.record_login(
+            user=None,
+            client_id="enabled-client",
+            flow="oauth",
+            result="failure",
+            credential_hint=None,
+            ip_address="127.0.0.2",
+            user_agent="test",
+            username="guest",
+            sub="guest-sub",
+        )
+        self.store.record_audit(
+            actor=self.admin,
+            action="platform.update",
+            target_type="platform",
+            target_id="enabled-client",
+            details={"enabled": True},
+            ip_address="127.0.0.1",
+            user_agent="test",
+        )
+
+        payload = self.client.get("/api/management/overview").get_json()
+
+        self.assertEqual(payload["summary"]["users"]["value"], 2)
+        self.assertEqual(payload["summary"]["loginSuccessRate24h"]["value"], 50)
+        self.assertGreaterEqual(payload["summary"]["platforms"]["value"], 2)
+        self.assertEqual(payload["summary"]["telemetry24h"]["value"], 0)
+        self.assertIn(
+            {"key": "success", "label": "成功", "count": 1},
+            payload["charts"]["loginResults"],
+        )
+        self.assertIn(
+            {"key": "failure", "label": "失败", "count": 1},
+            payload["charts"]["loginResults"],
+        )
+        self.assertIn(
+            {"key": "without-passkey", "label": "尚无 Passkey", "count": 1},
+            payload["charts"]["passkeyCoverage"],
+        )
+        self.assertEqual(
+            payload["charts"]["auditActivity"][0],
+            {"key": "platform.update", "label": "platform.update", "count": 1},
+        )
 
     def test_management_channel_start_requires_csrf(self) -> None:
         _private_key, public_jwk = self.channel_keypair()
@@ -748,6 +841,41 @@ class ManagementTest(unittest.TestCase):
             "abcd-1234-ef56-7890",
             json.dumps(payload),
         )
+
+    def test_external_telemetry_payload_uses_empty_local_charts(self) -> None:
+        response = self.client.patch(
+            "/api/management/settings/telemetry",
+            json={
+                "enabled": True,
+                "anonymousEnabled": False,
+                "defaultFeatures": ["screen"],
+                "retentionDays": 30,
+                "backend": "custom",
+                "deliveryMode": "direct",
+                "customUrl": "https://telemetry.example.com/events",
+                "customAuthMode": "none",
+                "customHeaders": {"X-Source": "passkey-auth"},
+                "customDirectContentType": "text/plain",
+                "timeoutSeconds": 1,
+            },
+            headers=self.write_headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payload = self.client.get("/api/management/telemetry").get_json()
+
+        self.assertEqual(payload["settings"]["backend"], "custom")
+        self.assertEqual(payload["settings"]["deliveryMode"], "direct")
+        self.assertEqual(
+            payload["charts"],
+            {
+                "operatingSystems": [],
+                "browsers": [],
+                "devices": [],
+                "features": [],
+            },
+        )
+        self.assertEqual(payload["statistics"]["summary"]["total"], 0)
 
     def test_jason_pairing_route_never_returns_negotiated_secret(self) -> None:
         runtime = self.app.extensions["telemetry_runtime"]

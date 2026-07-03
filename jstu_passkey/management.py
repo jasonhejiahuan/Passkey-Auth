@@ -127,15 +127,28 @@ def create_management_blueprint() -> Blueprint:
             default_enabled=bool(current_app.config["PASSKEY_REGISTRATION_ENABLED"])
         )
         passkey_settings = store.get_passkey_settings()
+        platforms = [_client_payload(client) for client in store.list_oauth_clients()]
+        login_history = store.list_login_history(limit=500)
+        audit_logs = store.list_audit_logs(limit=500)
+        overview_payload = _overview_payload(
+            users=users,
+            platforms=platforms,
+            login_history=login_history,
+            audit_logs=audit_logs,
+            telemetry_settings=_telemetry().settings_payload(),
+            telemetry_statistics=_telemetry().statistics(),
+        )
         return _no_store(
             jsonify(
                 {
                     "ok": True,
                     "currentUserId": actor.id,
                     "users": users,
-                    "platforms": [_client_payload(client) for client in store.list_oauth_clients()],
-                    "loginHistory": store.list_login_history(limit=500),
-                    "auditLogs": store.list_audit_logs(limit=500),
+                    "platforms": platforms,
+                    "loginHistory": login_history,
+                    "auditLogs": audit_logs,
+                    "summary": overview_payload["summary"],
+                    "charts": overview_payload["charts"],
                     "registration": {
                         "mode": settings.mode,
                         "enabledUntil": settings.enabled_until,
@@ -475,13 +488,19 @@ def create_management_blueprint() -> Blueprint:
         if not isinstance(actor, User):
             return actor
         runtime = _telemetry()
+        settings = runtime.settings_payload()
+        statistics = runtime.statistics()
         return _no_store(
             jsonify(
                 {
                     "ok": True,
-                    "settings": runtime.settings_payload(),
+                    "settings": settings,
                     "userPolicies": runtime.policies_payload(),
-                    "statistics": runtime.statistics(),
+                    "statistics": statistics,
+                    "charts": _telemetry_charts(
+                        settings=settings,
+                        statistics=statistics,
+                    ),
                 }
             )
         )
@@ -749,6 +768,142 @@ def _store() -> PasskeyStore:
 
 def _telemetry():
     return current_app.extensions["telemetry_runtime"]
+
+
+def _overview_payload(
+    *,
+    users: list[dict],
+    platforms: list[dict],
+    login_history: list[dict],
+    audit_logs: list[dict],
+    telemetry_settings: dict,
+    telemetry_statistics: dict,
+) -> dict:
+    now = int(time.time())
+    recent_cutoff = now - 86_400
+    active_users = [user for user in users if user["disabledAt"] is None]
+    recent_logins = [
+        entry for entry in login_history if int(entry.get("created_at") or 0) >= recent_cutoff
+    ]
+    successful_recent_logins = [
+        entry for entry in recent_logins if entry.get("result") == "success"
+    ]
+    login_success_rate = (
+        round(len(successful_recent_logins) / len(recent_logins) * 100)
+        if recent_logins
+        else None
+    )
+    enabled_platforms = [platform for platform in platforms if platform["enabled"]]
+    telemetry_backend = telemetry_settings.get("backend", "builtin")
+    telemetry_summary = telemetry_statistics.get("summary", {})
+    delivery = telemetry_settings.get("delivery", {})
+    if telemetry_backend == "builtin":
+        telemetry_value = int(telemetry_summary.get("last24h") or 0)
+        telemetry_detail = "24 小时内本地样本"
+    elif telemetry_settings.get("deliveryMode") == "direct":
+        telemetry_value = "直连"
+        telemetry_detail = "浏览器直接发送"
+    else:
+        telemetry_value = int(delivery.get("queued") or 0)
+        telemetry_detail = "外部队列等待发送"
+
+    return {
+        "summary": {
+            "users": {
+                "value": len(users),
+                "detail": f"{len(active_users)} 个启用账户",
+            },
+            "platforms": {
+                "value": len(enabled_platforms),
+                "detail": f"共 {len(platforms)} 个平台",
+            },
+            "loginSuccessRate24h": {
+                "value": login_success_rate,
+                "detail": f"{len(recent_logins)} 次登录尝试",
+            },
+            "telemetry24h": {
+                "value": telemetry_value,
+                "detail": telemetry_detail,
+                "backend": telemetry_backend,
+            },
+        },
+        "charts": {
+            "loginResults": _count_items(
+                recent_logins,
+                labels={
+                    "success": "成功",
+                    "failure": "失败",
+                },
+                key=lambda entry: str(entry.get("result") or "unknown"),
+            ),
+            "platformStatus": [
+                {"key": "enabled", "label": "已启用", "count": len(enabled_platforms)},
+                {
+                    "key": "disabled",
+                    "label": "已停用",
+                    "count": len(platforms) - len(enabled_platforms),
+                },
+            ],
+            "passkeyCoverage": [
+                {
+                    "key": "with-passkey",
+                    "label": "已有 Passkey",
+                    "count": len(
+                        [user for user in users if int(user.get("credentialCount") or 0) > 0]
+                    ),
+                },
+                {
+                    "key": "without-passkey",
+                    "label": "尚无 Passkey",
+                    "count": len(
+                        [user for user in users if int(user.get("credentialCount") or 0) == 0]
+                    ),
+                },
+            ],
+            "auditActivity": _count_items(
+                audit_logs[:120],
+                key=lambda entry: str(entry.get("action") or "unknown"),
+                limit=6,
+            ),
+        },
+    }
+
+
+def _telemetry_charts(*, settings: dict, statistics: dict) -> dict:
+    if settings.get("backend") != "builtin":
+        return {
+            "operatingSystems": [],
+            "browsers": [],
+            "devices": [],
+            "features": [],
+        }
+    distributions = statistics.get("distributions", {})
+    return {
+        "operatingSystems": distributions.get("operatingSystems", []),
+        "browsers": distributions.get("browsers", []),
+        "devices": distributions.get("devices", []),
+        "features": distributions.get("features", []),
+    }
+
+
+def _count_items(
+    entries: list[dict],
+    *,
+    key,
+    labels: dict[str, str] | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    labels = labels or {}
+    counts: dict[str, int] = {}
+    for entry in entries:
+        item_key = key(entry)
+        counts[item_key] = counts.get(item_key, 0) + 1
+    items = [
+        {"key": item_key, "label": labels.get(item_key, item_key), "count": count}
+        for item_key, count in counts.items()
+    ]
+    items.sort(key=lambda item: (-int(item["count"]), str(item["label"])))
+    return items[:limit] if limit else items
 
 
 def _current_user() -> User | None:

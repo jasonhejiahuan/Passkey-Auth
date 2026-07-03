@@ -25,7 +25,8 @@
           <span>Passkey Management</span>
         </div>
         <nav aria-label="管理区域">
-          <button class="nav-item is-active" data-view="users">用户</button>
+          <button class="nav-item is-active" data-view="overview">概览</button>
+          <button class="nav-item" data-view="users">用户</button>
           <button class="nav-item" data-view="platforms">平台</button>
           <button class="nav-item" data-view="login-history">登录历史</button>
           <button class="nav-item" data-view="audit-logs">审计日志</button>
@@ -43,12 +44,63 @@
         <header class="workspace-header">
           <div>
             <p class="eyebrow">Passkey-Auth</p>
-            <h1 id="view-title">用户</h1>
+            <h1 id="view-title">概览</h1>
           </div>
           <output id="management-status" role="status" aria-live="polite" hidden></output>
         </header>
 
-        <section id="users-view" class="view is-active">
+        <section id="overview-view" class="view is-active">
+          <section class="priority-panel" aria-labelledby="overview-priority-title">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Health</p>
+                <h2 id="overview-priority-title">运行状态</h2>
+              </div>
+              <button type="button" class="quiet-button" id="overview-clear-filter" hidden>清除筛选</button>
+            </div>
+            <div id="overview-summary" class="metric-grid priority-grid"></div>
+          </section>
+
+          <section class="analysis-panel" aria-labelledby="overview-analysis-title">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Signals</p>
+                <h2 id="overview-analysis-title">交互图表</h2>
+              </div>
+              <p id="overview-filter-status" class="filter-status" aria-live="polite"></p>
+            </div>
+            <div class="overview-chart-grid">
+              <section class="chart-card">
+                <h3>24 小时登录结果</h3>
+                <div id="overview-login-chart"></div>
+              </section>
+              <section class="chart-card">
+                <h3>平台状态</h3>
+                <div id="overview-platform-chart"></div>
+              </section>
+              <section class="chart-card">
+                <h3>Passkey 覆盖率</h3>
+                <div id="overview-passkey-chart"></div>
+              </section>
+              <section class="chart-card">
+                <h3>最近审计活动</h3>
+                <div id="overview-audit-chart"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="details-panel" aria-labelledby="overview-details-title">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Recent</p>
+                <h2 id="overview-details-title">摘要明细</h2>
+              </div>
+            </div>
+            <div id="overview-details-list" class="data-list overview-details-list"></div>
+          </section>
+        </section>
+
+        <section id="users-view" class="view">
           <div class="toolbar">
             <input id="user-search" type="search" placeholder="搜索用户名或 sub">
             <a class="button-link" href="/api/management/export/users.csv">导出 CSV</a>
@@ -240,6 +292,10 @@
               </header>
               <p id="telemetry-external-notice" class="external-telemetry-notice" hidden></p>
               <div id="telemetry-summary" class="metric-grid"></div>
+              <div class="chart-filter-row">
+                <p id="telemetry-filter-status" class="filter-status" aria-live="polite"></p>
+                <button type="button" class="quiet-button" id="telemetry-clear-filter" hidden>清除筛选</button>
+              </div>
               <div class="telemetry-chart-grid">
                 <section class="chart-card"><h3>操作系统</h3><div id="telemetry-os-chart"></div></section>
                 <section class="chart-card"><h3>浏览器</h3><div id="telemetry-browser-chart"></div></section>

@@ -10,6 +10,8 @@ let actionToken = window.sessionStorage.getItem(ACTION_TOKEN_STORAGE_KEY) || "";
 let state = null;
 let telemetryState = null;
 let telemetryLoaded = false;
+let overviewFilter = null;
+let telemetryFilter = null;
 let settingsSaveChain = Promise.resolve();
 let statusTimer = null;
 let managementChannel = {
@@ -28,6 +30,10 @@ document.querySelectorAll(".nav-item").forEach((button) => {
 window.addEventListener("hashchange", showViewFromHash);
 document.querySelector("#refresh-button").addEventListener("click", loadOverview);
 document.querySelector("#logout-button").addEventListener("click", logout);
+document.querySelector("#overview-clear-filter").addEventListener("click", () => {
+  overviewFilter = null;
+  renderOverview();
+});
 document.querySelector("#user-search").addEventListener("input", renderUsers);
 document.querySelector("#new-platform-button").addEventListener("click", openNewPlatform);
 document.querySelector("#registration-settings").addEventListener("change", saveRegistration);
@@ -38,6 +44,10 @@ document.querySelector("#telemetry-backend-settings").addEventListener("change",
 document.querySelector("#test-telemetry-backend").addEventListener("click", testTelemetryBackend);
 document.querySelector("#pair-jason-telemetry").addEventListener("click", pairJasonTelemetry);
 document.querySelector("#clear-telemetry-button").addEventListener("click", clearTelemetry);
+document.querySelector("#telemetry-clear-filter").addEventListener("click", () => {
+  telemetryFilter = null;
+  renderTelemetry();
+});
 document.querySelectorAll("[data-clear-log]").forEach((button) => {
   button.addEventListener("click", () => clearLogs(button.dataset.clearLog));
 });
@@ -72,6 +82,7 @@ async function logout() {
 }
 
 function renderAll() {
+  renderOverview();
   renderUsers();
   renderPlatforms();
   renderLoginHistory();
@@ -84,7 +95,7 @@ function showView(name, options = {}) {
   const target = [...document.querySelectorAll(".nav-item")]
     .find((item) => item.dataset.view === name);
   if (!target) {
-    name = "users";
+    name = "overview";
   }
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.view === name);
@@ -104,13 +115,168 @@ function showView(name, options = {}) {
 }
 
 function showViewFromHash() {
-  const requestedView = window.location.hash.slice(1) || "users";
+  const requestedView = window.location.hash.slice(1) || "overview";
   const exists = [...document.querySelectorAll(".nav-item")]
     .some((item) => item.dataset.view === requestedView);
-  showView(exists ? requestedView : "users", { updateHash: false });
+  showView(exists ? requestedView : "overview", { updateHash: false });
   if (!exists && window.location.hash) {
-    window.history.replaceState(null, "", "#users");
+    window.history.replaceState(null, "", "#overview");
   }
+}
+
+function renderOverview() {
+  if (!state) return;
+  renderOverviewSummary();
+  const charts = state.charts || {};
+  renderInteractiveChart("#overview-login-chart", charts.loginResults || [], {
+    activeKey: overviewFilter?.chart === "login" ? overviewFilter.key : "",
+    emptyText: "24 小时内暂无登录尝试",
+    onSelect: (item) => toggleOverviewFilter("login", item),
+  });
+  renderInteractiveChart("#overview-platform-chart", charts.platformStatus || [], {
+    activeKey: overviewFilter?.chart === "platform" ? overviewFilter.key : "",
+    emptyText: "暂无平台",
+    onSelect: (item) => toggleOverviewFilter("platform", item),
+  });
+  renderInteractiveChart("#overview-passkey-chart", charts.passkeyCoverage || [], {
+    activeKey: overviewFilter?.chart === "passkey" ? overviewFilter.key : "",
+    emptyText: "暂无用户",
+    onSelect: (item) => toggleOverviewFilter("passkey", item),
+  });
+  renderInteractiveChart("#overview-audit-chart", charts.auditActivity || [], {
+    activeKey: overviewFilter?.chart === "audit" ? overviewFilter.key : "",
+    emptyText: "暂无审计活动",
+    onSelect: (item) => toggleOverviewFilter("audit", item),
+  });
+  renderOverviewDetails();
+}
+
+function renderOverviewSummary() {
+  const summary = state.summary || {};
+  const loginRate = summary.loginSuccessRate24h?.value;
+  const metrics = [
+    ["用户", summary.users?.value ?? 0, summary.users?.detail || "无账户"],
+    ["启用平台", summary.platforms?.value ?? 0, summary.platforms?.detail || "无平台"],
+    [
+      "24 小时登录成功率",
+      loginRate === null || loginRate === undefined ? "—" : `${loginRate}%`,
+      summary.loginSuccessRate24h?.detail || "无登录尝试",
+    ],
+    [
+      "遥测状态",
+      summary.telemetry24h?.value ?? 0,
+      summary.telemetry24h?.detail || "未启用",
+    ],
+  ];
+  document.querySelector("#overview-summary").innerHTML = metrics.map(([label, value, detail]) => `
+    <article class="metric-card priority-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(detail)}</small>
+    </article>
+  `).join("");
+}
+
+function toggleOverviewFilter(chart, item) {
+  if (overviewFilter?.chart === chart && overviewFilter.key === item.key) {
+    overviewFilter = null;
+  } else {
+    overviewFilter = { chart, key: item.key, label: item.label };
+  }
+  renderOverview();
+}
+
+function renderOverviewDetails() {
+  const clearButton = document.querySelector("#overview-clear-filter");
+  const status = document.querySelector("#overview-filter-status");
+  clearButton.hidden = !overviewFilter;
+  status.textContent = overviewFilter
+    ? `已筛选：${overviewFilter.label}`
+    : "全部摘要";
+  let entries = [];
+  if (!overviewFilter) {
+    entries = [
+      ...state.loginHistory.slice(0, 4).map((entry) => ({ type: "login", entry })),
+      ...state.auditLogs.slice(0, 4).map((entry) => ({ type: "audit", entry })),
+    ].sort((left, right) =>
+      Number(right.entry.created_at || 0) - Number(left.entry.created_at || 0),
+    ).slice(0, 8);
+  } else if (overviewFilter.chart === "login") {
+    entries = state.loginHistory
+      .filter((entry) => String(entry.result || "unknown") === overviewFilter.key)
+      .slice(0, 10)
+      .map((entry) => ({ type: "login", entry }));
+  } else if (overviewFilter.chart === "platform") {
+    const enabled = overviewFilter.key === "enabled";
+    entries = state.platforms
+      .filter((platform) => Boolean(platform.enabled) === enabled)
+      .map((entry) => ({ type: "platform", entry }));
+  } else if (overviewFilter.chart === "passkey") {
+    const withPasskey = overviewFilter.key === "with-passkey";
+    entries = state.users
+      .filter((user) => (Number(user.credentialCount) > 0) === withPasskey)
+      .map((entry) => ({ type: "user", entry }));
+  } else if (overviewFilter.chart === "audit") {
+    entries = state.auditLogs
+      .filter((entry) => String(entry.action || "unknown") === overviewFilter.key)
+      .slice(0, 10)
+      .map((entry) => ({ type: "audit", entry }));
+  }
+  renderList("#overview-details-list", entries, renderOverviewDetailRow);
+}
+
+function renderOverviewDetailRow(item) {
+  const entry = item.entry;
+  if (item.type === "login") {
+    return `
+      <article class="data-row overview-detail-row">
+        <div class="row-primary">
+          <strong>${escapeHtml(entry.username_snapshot || "未知用户")}</strong>
+          <small>${formatTime(entry.created_at)}</small>
+        </div>
+        <span class="badge ${entry.result === "success" ? "is-on" : "is-off"}">${escapeHtml(entry.result)}</span>
+        <span>${escapeHtml(entry.client_id || entry.flow || "passkey")}</span>
+        <span>${escapeHtml(entry.ip_address || "—")}</span>
+      </article>
+    `;
+  }
+  if (item.type === "audit") {
+    return `
+      <article class="data-row overview-detail-row">
+        <div class="row-primary">
+          <strong>${escapeHtml(entry.action)}</strong>
+          <small>${formatTime(entry.created_at)}</small>
+        </div>
+        <span>${escapeHtml(entry.actor_username || "已删除管理员")}</span>
+        <span>${escapeHtml(entry.target_type || "—")}</span>
+        <span>${escapeHtml(entry.target_id || "—")}</span>
+      </article>
+    `;
+  }
+  if (item.type === "platform") {
+    return `
+      <article class="data-row overview-detail-row">
+        <div class="row-primary">
+          <strong>${escapeHtml(entry.name)}</strong>
+          <small>${escapeHtml(entry.clientId)}</small>
+        </div>
+        <span class="badge ${entry.enabled ? "is-on" : "is-off"}">${entry.enabled ? "已启用" : "已停用"}</span>
+        <span>${entry.redirectUris.length} 回调</span>
+        <span>${entry.isDemo ? "内置示例" : "OAuth Client"}</span>
+      </article>
+    `;
+  }
+  return `
+    <article class="data-row overview-detail-row">
+      <div class="row-primary">
+        <strong>${escapeHtml(entry.username)}</strong>
+        <small>${escapeHtml(entry.sub)}</small>
+      </div>
+      <span>${entry.credentialCount} Passkey</span>
+      <span class="badge ${entry.disabledAt ? "is-off" : "is-on"}">${entry.disabledAt ? "已停用" : "可登录"}</span>
+      <span>${formatTime(entry.lastLoginAt)}</span>
+    </article>
+  `;
 }
 
 function renderUsers() {
@@ -544,31 +710,28 @@ function renderTelemetry() {
       ? "浏览器直接发送，Passkey-Auth 不接收或保存样本"
       : "由 Passkey-Auth 的有界后台队列异步转发";
     notice.textContent = `当前数据由 ${backendLabel} 保存；${pathLabel}。本地统计、CSV 和清理功能不会触发外部查询。`;
+    telemetryFilter = null;
   }
   renderTelemetrySummary();
   if (external) {
+    document.querySelector("#telemetry-clear-filter").hidden = true;
+    document.querySelector("#telemetry-filter-status").textContent =
+      "外部接收端管理统计明细";
     ["#telemetry-os-chart", "#telemetry-browser-chart", "#telemetry-device-chart", "#telemetry-feature-chart"]
       .forEach((selector) => {
         document.querySelector(selector).innerHTML =
           '<p class="muted chart-empty">统计由外部接收端管理</p>';
       });
   } else {
-    renderTelemetryChart(
-      "#telemetry-os-chart",
-      telemetryState.statistics.distributions.operatingSystems,
-    );
-    renderTelemetryChart(
-      "#telemetry-browser-chart",
-      telemetryState.statistics.distributions.browsers,
-    );
-    renderTelemetryChart(
-      "#telemetry-device-chart",
-      telemetryState.statistics.distributions.devices,
-    );
-    renderTelemetryChart(
-      "#telemetry-feature-chart",
-      telemetryState.statistics.distributions.features,
-    );
+    const charts = telemetryState.charts || telemetryState.statistics.distributions;
+    document.querySelector("#telemetry-clear-filter").hidden = !telemetryFilter;
+    document.querySelector("#telemetry-filter-status").textContent = telemetryFilter
+      ? `已筛选：${telemetryFilter.label}`
+      : "全部样本";
+    renderTelemetryChart("#telemetry-os-chart", charts.operatingSystems, "osFamily");
+    renderTelemetryChart("#telemetry-browser-chart", charts.browsers, "browserFamily");
+    renderTelemetryChart("#telemetry-device-chart", charts.devices, "deviceClass");
+    renderTelemetryChart("#telemetry-feature-chart", charts.features, "features");
   }
   renderTelemetryEvents();
   renderTelemetryUsers();
@@ -614,24 +777,21 @@ function renderTelemetrySummary() {
   `).join("");
 }
 
-function renderTelemetryChart(selector, items) {
-  const target = document.querySelector(selector);
-  if (!items.length) {
-    target.innerHTML = '<p class="muted chart-empty">暂无数据</p>';
-    return;
-  }
-  const maximum = Math.max(...items.map((item) => item.count), 1);
-  target.innerHTML = items.slice(0, 8).map((item) => {
-    const width = Math.max(Math.round((item.count / maximum) * 100), 4);
-    const widthClass = Math.min(Math.max(Math.ceil(width / 10) * 10, 10), 100);
-    const label = telemetryFeatureLabels[item.label] || item.label;
-    return `
-      <div class="bar-row">
-        <div><span>${escapeHtml(label)}</span><strong>${item.count}</strong></div>
-        <span class="bar-track"><span class="bar-fill bar-width-${widthClass}"></span></span>
-      </div>
-    `;
-  }).join("");
+function renderTelemetryChart(selector, items, field) {
+  renderInteractiveChart(selector, items || [], {
+    activeKey: telemetryFilter?.field === field ? telemetryFilter.key : "",
+    emptyText: "暂无数据",
+    labelFor: (item) => telemetryFeatureLabels[item.label] || item.label,
+    onSelect: (item) => {
+      const label = telemetryFeatureLabels[item.label] || item.label;
+      if (telemetryFilter?.field === field && telemetryFilter.key === item.label) {
+        telemetryFilter = null;
+      } else {
+        telemetryFilter = { field, key: item.label, label };
+      }
+      renderTelemetry();
+    },
+  });
 }
 
 function renderTelemetryEvents() {
@@ -640,7 +800,7 @@ function renderTelemetryEvents() {
       '<p class="empty">外部模式不会在 Passkey-Auth 中保留样本。</p>';
     return;
   }
-  const entries = telemetryState.statistics.recent;
+  const entries = filteredTelemetryEvents();
   renderList("#telemetry-recent-list", entries, (entry, index) => {
     const user = entry.userId
       ? state.users.find((candidate) => candidate.id === entry.userId)
@@ -663,10 +823,19 @@ function renderTelemetryEvents() {
   });
   document.querySelectorAll("[data-telemetry-detail]").forEach((button) => {
     button.addEventListener("click", () => {
-      const entry = telemetryState.statistics.recent[Number(button.dataset.telemetryDetail)];
+      const entry = filteredTelemetryEvents()[Number(button.dataset.telemetryDetail)];
       openDetail("遥测样本", JSON.stringify(entry, null, 2));
     });
   });
+}
+
+function filteredTelemetryEvents() {
+  const entries = telemetryState.statistics.recent;
+  if (!telemetryFilter) return entries;
+  if (telemetryFilter.field === "features") {
+    return entries.filter((entry) => entry.features.includes(telemetryFilter.key));
+  }
+  return entries.filter((entry) => String(entry[telemetryFilter.field]) === telemetryFilter.key);
 }
 
 function renderTelemetryUsers() {
@@ -1329,6 +1498,49 @@ function renderList(selector, items, renderer) {
   document.querySelector(selector).innerHTML = items.length
     ? items.map(renderer).join("")
     : '<p class="empty">暂无数据</p>';
+}
+
+function renderInteractiveChart(selector, items, options = {}) {
+  const target = document.querySelector(selector);
+  if (!items.length) {
+    target.innerHTML = `<p class="muted chart-empty">${escapeHtml(options.emptyText || "暂无数据")}</p>`;
+    return;
+  }
+  const maximum = Math.max(...items.map((item) => Number(item.count) || 0), 1);
+  target.innerHTML = items.slice(0, 8).map((item, index) => {
+    const itemKey = String(item.key ?? item.label ?? index);
+    const label = String(options.labelFor ? options.labelFor(item) : item.label);
+    const count = Number(item.count) || 0;
+    const width = count ? Math.max(Math.round((count / maximum) * 100), 4) : 0;
+    const widthClass = count
+      ? Math.min(Math.max(Math.ceil(width / 10) * 10, 10), 100)
+      : 0;
+    const active = Boolean(options.activeKey && options.activeKey === itemKey);
+    const tooltip = `${label}: ${count.toLocaleString()} 条`;
+    return `
+      <button
+        type="button"
+        class="chart-row ${active ? "is-active" : ""}"
+        data-chart-index="${index}"
+        data-tooltip="${escapeHtml(tooltip)}"
+        aria-pressed="${active ? "true" : "false"}"
+        title="${escapeHtml(tooltip)}"
+      >
+        <span class="chart-row-label">
+          <span>${escapeHtml(label)}</span>
+          <strong>${count.toLocaleString()}</strong>
+        </span>
+        <span class="bar-track" aria-hidden="true">
+          <span class="bar-fill bar-width-${widthClass}"></span>
+        </span>
+      </button>
+    `;
+  }).join("");
+  target.querySelectorAll("[data-chart-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      options.onSelect?.(items[Number(button.dataset.chartIndex)]);
+    });
+  });
 }
 
 function permissionToggle(key, checked) {

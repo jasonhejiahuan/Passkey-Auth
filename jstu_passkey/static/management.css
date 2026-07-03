@@ -224,6 +224,52 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 14px; }
   font-size: 12px;
   line-height: 1.6;
 }
+.priority-panel,
+.analysis-panel,
+.details-panel {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.analysis-panel,
+.details-panel { margin-top: 18px; }
+.priority-grid { margin-bottom: 0; }
+.priority-card {
+  min-height: 118px;
+  display: grid;
+  align-content: space-between;
+}
+.metric-card small {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.overview-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+.filter-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.chart-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  margin: -2px 0 12px;
+}
+.overview-detail-row {
+  grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(100px, .7fr));
+}
 .telemetry-layout {
   display: grid;
   grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
@@ -373,6 +419,68 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 14px; }
   border-radius: inherit;
   background: var(--text);
 }
+.chart-row {
+  position: relative;
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 12px;
+  text-align: left;
+  border-radius: 10px;
+  background: transparent;
+}
+.chart-row:first-child { margin-top: 0; }
+.chart-row:hover,
+.chart-row:focus-visible,
+.chart-row.is-active {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+.chart-row:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--text) 18%, transparent);
+  outline-offset: 2px;
+}
+.chart-row.is-active .bar-fill { background: var(--success); }
+.chart-row-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.chart-row-label span,
+.chart-row-label strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chart-row-label strong { color: var(--text); }
+.chart-row::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% + 8px);
+  z-index: 2;
+  max-width: min(260px, calc(100vw - 48px));
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.chart-row:hover::after,
+.chart-row:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+.bar-width-0 { width: 0; }
 .bar-width-10 { width: 10%; }
 .bar-width-20 { width: 20%; }
 .bar-width-30 { width: 30%; }
@@ -486,6 +594,16 @@ dialog form > header {
   .data-row > button { grid-column: 1 / -1; }
   .permission-grid { grid-template-columns: 1fr; }
   .settings-grid, .option-grid { grid-template-columns: 1fr; }
+  .overview-chart-grid { grid-template-columns: 1fr; }
+  .priority-panel,
+  .analysis-panel,
+  .details-panel {
+    padding: 16px;
+  }
+  .chart-filter-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
   .telemetry-layout { grid-template-columns: 1fr; }
   .telemetry-config-stack,
   .telemetry-dashboard,
@@ -498,6 +616,7 @@ dialog form > header {
   .telemetry-policy-row { grid-template-columns: 1fr; }
   .telemetry-user-features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .telemetry-events .data-row { grid-template-columns: 1fr 1fr; }
+  .overview-detail-row { grid-template-columns: 1fr 1fr; }
 }
 
 @media (prefers-color-scheme: dark) {

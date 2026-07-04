@@ -37,7 +37,7 @@
       },
       "serverReadyAction": {
         "action": "openExternally",
-        "pattern": "\\* Running on http://127.0.0.1:([0-9]+)",
+        "pattern": "\\* Running on http://localhost:([0-9]+)",
         "uriFormat": "http://localhost:%s"
       }
     }

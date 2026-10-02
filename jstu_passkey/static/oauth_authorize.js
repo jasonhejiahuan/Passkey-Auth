@@ -26,23 +26,28 @@ async function authorizeWithPasskey() {
   logoButton.disabled = true;
   setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   try {
-    const { publicKey } = await postJson("/auth/passkey/options", {
-      username: root.dataset.username || "",
-      mode: root.dataset.oauthMode,
-      authFlowToken: root.dataset.authFlowToken,
-    });
-    const assertion = await navigator.credentials.get({
-      publicKey: decodeRequestOptions(publicKey),
-    });
-    const verification = await postJson("/auth/passkey/verify", {
-      credential: encodeAuthenticationCredential(assertion),
-      authFlowToken: root.dataset.authFlowToken,
-    });
-    if (verification.action_token) {
-      window.sessionStorage.setItem(
-        ACTION_TOKEN_STORAGE_KEY,
-        verification.action_token,
-      );
+    if (root.dataset.screenHint === "signup") {
+      const { createPasskey } = await import("/api/ui/register-client.js");
+      await createPasskey(root.dataset.username, { oauth: true });
+    } else {
+      const { publicKey } = await postJson("/auth/passkey/options", {
+        username: root.dataset.username || "",
+        mode: root.dataset.oauthMode,
+        authFlowToken: root.dataset.authFlowToken,
+      });
+      const assertion = await navigator.credentials.get({
+        publicKey: decodeRequestOptions(publicKey),
+      });
+      const verification = await postJson("/auth/passkey/verify", {
+        credential: encodeAuthenticationCredential(assertion),
+        authFlowToken: root.dataset.authFlowToken,
+      });
+      if (verification.action_token) {
+        window.sessionStorage.setItem(
+          ACTION_TOKEN_STORAGE_KEY,
+          verification.action_token,
+        );
+      }
     }
     let result;
     if (root.dataset.oauthMode === "challenge") {

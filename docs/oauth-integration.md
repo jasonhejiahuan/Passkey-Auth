@@ -94,6 +94,61 @@ PASSKEY_ORIGIN=https://auth.xxxxx
 
 ## 标准 OAuth Authorization Code Flow
 
+### PKCE、服务发现与自助注册
+
+`GET /.well-known/oauth-authorization-server` 返回真实 issuer、授权/token/userinfo
+地址、`code_challenge_methods_supported: ["S256"]` 和
+`registration_screen_hint_supported: true`。这是 OAuth 服务元数据；服务不签发
+OIDC ID token，业务后端应通过 HTTPS token/userinfo 响应获取稳定 `sub`。
+
+新客户端应使用 S256 PKCE：后端保存随机 43–128 字符 `code_verifier`，授权请求
+增加 `code_challenge=BASE64URL(SHA256(code_verifier))`（无 padding）和
+`code_challenge_method=S256`；换 token 时带上原 `code_verifier`。
+PKCE 不替代 confidential client 的 `client_secret`。未使用 PKCE 的既有客户端
+继续可用；声明了 PKCE 的 code 缺少或使用错误 verifier 时无法换 token。
+
+自助注册的业务端先收集用户名，然后在同一个授权请求中增加：
+
+```text
+screen_hint=signup&login_hint=Alice
+```
+
+用户名允许 1–64 个中英文、数字、空格与 `_ . @ + -`。注册在标准 Logo 页创建
+Passkey，验证后继续原 OAuth 请求，不需要密码或第二次登录。如果用户名已经
+属于一个 provider 账户，则复用原 Logo 验证页，用该用户名的已有 Passkey 完成
+一次新验证，允许业务系统建立自己的新账户。已有登录 cookie 不会跳过这次验证。
+首次加入 PPQ 的已有 Passkey-Auth 用户应填写自己的 provider 用户名以复用身份；
+不同的新用户名会创建独立 provider 身份。不能以用户名推断认证成功。
+正常登录可省略 `login_hint`，由 Passkey 选择账户。
+
+新 provider 身份注册默认关闭，OAuth 注册仍由 Management 中的注册开关控制；
+关闭开关会阻止已打开页面继续创建身份，但不阻止已有身份进行 Passkey 登录。
+开启注册前应确认当前默认用户平台策略是否符合部署需要。
+授权参数、用户名、PKCE 与新完成的 Passkey ceremony 在服务端绑定；新请求会
+使同一浏览器中较早的未完成 OAuth 页面失效。
+
+使用 PKCE 或 signup 的请求取消/失败时回到原来的已白名单 callback，携带
+`error`、`error_description`、`state`。业务后端仍须先验证 state，不能因为错误
+回调而跳过浏览器绑定。非 PKCE 的既有 Hyping 错误路径保持原样。
+
+### PPQ / Cloudflare 部署配置
+
+1. 在真实 Passkey-Auth 部署更新此版本，保留 v2 数据库与固定签名密钥。
+   此扩展不要求数据库迁移或重建。
+2. 使用管理员 Passkey 登录 `/management`，在平台管理创建单独的 `ppq-practice`
+   客户端，填写最终 HTTPS callback（如 `https://ppq.beta.jasonstu.cc/api/auth/callback`）。
+   callback 必须精确匹配；只加入实际使用的站点。
+3. 在 PPQ Worker 配置 `PASSKEY_ISSUER`、`PASSKEY_CLIENT_ID`、`APP_ORIGIN`。
+   将新客户端的一次性 secret 通过受保护本地输入写入 Cloudflare secret
+   `PASSKEY_CLIENT_SECRET`，例如 `wrangler secret put PASSKEY_CLIENT_SECRET` 的
+   交互输入。不要把 secret 写入 wrangler 配置、命令参数、前端、聊天或版本库。
+4. 在 Management 开启注册后，用新 Passkey 完成一次注册，再用已有 Passkey
+   验证登录。确认 token/userinfo 的稳定 `sub` 与 PPQ 用户绑定一致。
+5. PPQ 的管理员、Team、权限和封禁属于 PPQ 业务权限；不要从可修改的 provider
+   username 或 display name 自动推导管理员身份。
+
+客户端必须使用真实部署的 issuer。本仓库示例域名不代表已上线的认证服务。
+
 ### 流程图
 
 ```mermaid

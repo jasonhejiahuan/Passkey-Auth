@@ -1,0 +1,5 @@
+# Linux service deployment; independent of desktop wheel compatibility.
+Flask==3.1.3
+cryptography==50.0.2
+webauthn==2.8.0
+gunicorn==26.2.0

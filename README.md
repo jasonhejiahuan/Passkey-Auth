@@ -2,6 +2,10 @@
 
 一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册、登录、OAuth / SSO 认证服务。
 
+独立 Linux 正式部署见 [production-linux.md](docs/production-linux.md)，包括
+专属 PPQ 客户端、安全配置、管理员分配及备份。Cloudflare Python Workers 的
+实测限制见 [兼容性记录](docs/cloudflare-python-feasibility.md)。
+
 ## 特性
 
 - 用户可自定义用户名
@@ -286,6 +290,7 @@ OAuth 相关端点：
 
 ```text
 GET  /oauth/authorize
+GET  /.well-known/oauth-authorization-server
 POST /oauth/authorize/complete
 POST /oauth/token
 GET  /oauth/userinfo
@@ -300,6 +305,11 @@ redirect_uri=http://localhost:5002/demo/oauth/callback
 ```
 
 如果你部署到其他域名或端口，设置 `PASSKEY_ORIGIN`，并用 `PASSKEY_OAUTH_CLIENT_ID`、`PASSKEY_OAUTH_CLIENT_SECRET` 和 `PASSKEY_OAUTH_REDIRECT_URIS` 配置生产 client。`PASSKEY_OAUTH_REDIRECT_URIS` 支持逗号或换行分隔多个精确 callback 地址。OAuth callback URL 里只携带必要的 `code/state`，不会携带 `username`。
+
+新客户端支持 S256 PKCE。业务端可先收集用户名，再通过
+`screen_hint=signup&login_hint=用户名` 进入 Passkey 注册并继续同一授权流程；
+此入口仍受默认关闭的注册开关控制。OAuth metadata、参数和 Cloudflare Worker
+密钥配置步骤见 [OAuth 接入文档](docs/oauth-integration.md#pkce服务发现与自助注册)。
 
 本地开发时，默认 OAuth client 也允许 Hyping Web UI 的 callback：
 

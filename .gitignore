@@ -11,3 +11,6 @@ instance/
 build/
 dist/
 *.spec
+
+.cache/
+.wrangler/

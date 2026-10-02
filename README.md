@@ -1,5 +1,3 @@
-此项目更新比较快～
-
 # Passkey Auth
 
 一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册、登录、OAuth / SSO 认证服务。

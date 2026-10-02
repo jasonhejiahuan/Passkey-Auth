@@ -68,22 +68,27 @@ function ensureRegisterPanel(config) {
 
 async function registerPasskey() {
   await runRegisterAction(async () => {
-    const username = getUsername();
-    const { publicKey } = await postJson("/api/register/options", {
-      username,
-    });
-    const credential = await navigator.credentials.create({
-      publicKey: decodeCreationOptions(publicKey),
-    });
-
-    const payload = { credential: encodeRegistrationCredential(credential) };
-    const result = await postJson("/api/register/verify", payload);
-    if (result.action_token) {
-      window.sessionStorage.setItem("passkey-action-token", result.action_token);
-    }
+    await createPasskey(getUsername());
     hideRegisterPanel();
     document.dispatchEvent(new Event("passkey-session-changed"));
   });
+}
+
+export async function createPasskey(username, { oauth = false } = {}) {
+  const { publicKey } = await postJson("/api/register/options", {
+    username,
+    oauth,
+  });
+  const credential = await navigator.credentials.create({
+    publicKey: decodeCreationOptions(publicKey),
+  });
+
+  const payload = { credential: encodeRegistrationCredential(credential) };
+  const result = await postJson("/api/register/verify", payload);
+  if (result.action_token) {
+    window.sessionStorage.setItem("passkey-action-token", result.action_token);
+  }
+  return result;
 }
 
 async function runRegisterAction(action) {

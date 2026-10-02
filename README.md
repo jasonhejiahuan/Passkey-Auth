@@ -2,6 +2,10 @@
 
 一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册、登录、OAuth / SSO 认证服务。
 
+独立 Linux 正式部署见 [production-linux.md](docs/production-linux.md)，包括
+专属 PPQ 客户端、安全配置、管理员分配及备份。Cloudflare Python Workers 的
+实测限制见 [兼容性记录](docs/cloudflare-python-feasibility.md)。
+
 ## 特性
 
 - 用户可自定义用户名

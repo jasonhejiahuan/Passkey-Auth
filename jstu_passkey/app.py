@@ -547,12 +547,15 @@ def create_app() -> Flask:
             return _oauth_redirect_error(redirect_uri, state, "invalid_request", "仅支持有效的 S256 PKCE")
         if screen_hint not in {"", "signup"}:
             return _oauth_redirect_error(redirect_uri, state, "invalid_request", "未知的 screen_hint")
-        if screen_hint == "signup" and not _registration_enabled(app):
-            return _oauth_redirect_error(redirect_uri, state, "access_denied", "注册功能未启用")
         try:
             username = normalize_username(login_hint) if login_hint or screen_hint == "signup" else ""
         except ValueError as exc:
             return _oauth_redirect_error(redirect_uri, state, "invalid_request", str(exc))
+        # A new business account can reuse an existing provider identity, but only
+        # after a fresh Passkey ceremony for the supplied username.
+        create_identity = screen_hint == "signup" and not store.get_user_by_username(username)
+        if create_identity and not _registration_enabled(app):
+            return _oauth_redirect_error(redirect_uri, state, "access_denied", "注册功能未启用")
         session["oauth_request"] = {
             "request_id": secrets.token_urlsafe(24),
             "client_id": client_id,
@@ -560,10 +563,10 @@ def create_app() -> Flask:
             "state": state,
             "code_challenge": code_challenge,
             "username": username,
-            "screen_hint": screen_hint,
+            "screen_hint": "signup" if create_identity else "",
             "expires_at": int(time.time()) + app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"],
         }
-        if screen_hint == "signup":
+        if create_identity:
             session["registration_unlocked"] = True
             session["registration_unlock_expires_at"] = (
                 int(time.time()) + app.config["REGISTER_UNLOCK_TTL_SECONDS"]
@@ -579,7 +582,7 @@ def create_app() -> Flask:
             state=state,
             challenge_id="",
             username=username,
-            screen_hint=screen_hint,
+            screen_hint="signup" if create_identity else "",
             auth_flow_token=_new_auth_flow_token(),
             error_redirect_uri=(
                 redirect_uri if code_challenge or screen_hint

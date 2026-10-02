@@ -114,12 +114,16 @@ screen_hint=signup&login_hint=Alice
 ```
 
 用户名允许 1–64 个中英文、数字、空格与 `_ . @ + -`。注册在标准 Logo 页创建
-Passkey，验证后继续原 OAuth 请求，不需要密码或第二次登录。相同用户名已存在
-时注册失败，业务端应让用户改名或从登录入口使用已有 Passkey；不能以用户名
-推断身份。正常登录可省略 `login_hint`，由 Passkey 选择账户。
+Passkey，验证后继续原 OAuth 请求，不需要密码或第二次登录。如果用户名已经
+属于一个 provider 账户，则复用原 Logo 验证页，用该用户名的已有 Passkey 完成
+一次新验证，允许业务系统建立自己的新账户。已有登录 cookie 不会跳过这次验证。
+首次加入 PPQ 的已有 Passkey-Auth 用户应填写自己的 provider 用户名以复用身份；
+不同的新用户名会创建独立 provider 身份。不能以用户名推断认证成功。
+正常登录可省略 `login_hint`，由 Passkey 选择账户。
 
-注册默认关闭，OAuth 注册仍由 Management 中的注册开关控制；关闭开关会阻止
-已打开页面继续注册。开启注册前应确认当前默认用户平台策略是否符合部署需要。
+新 provider 身份注册默认关闭，OAuth 注册仍由 Management 中的注册开关控制；
+关闭开关会阻止已打开页面继续创建身份，但不阻止已有身份进行 Passkey 登录。
+开启注册前应确认当前默认用户平台策略是否符合部署需要。
 授权参数、用户名、PKCE 与新完成的 Passkey ceremony 在服务端绑定；新请求会
 使同一浏览器中较早的未完成 OAuth 页面失效。
 

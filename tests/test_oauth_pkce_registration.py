@@ -121,6 +121,24 @@ class OAuthPKCERegistrationTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertFalse(session.get('registration_unlocked'))
 
+    def test_signup_reuses_existing_identity_with_fresh_passkey_even_when_registration_closed(self):
+        user = self.store.create_user('Alice', b'a' * 32)
+        with self.client.session_transaction() as session:
+            session['signed_in_user_id'] = user.id
+            session['signed_in_session_version'] = user.session_version
+        response = self.authorize(screen_hint='signup', login_hint='Alice')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-screen-hint=""', body)
+        self.assertIn('data-username="Alice"', body)
+        self.assertNotIn('为 Alice 创建 Passkey', body)
+        with self.client.session_transaction() as session:
+            self.assertFalse(session.get('registration_unlocked'))
+            self.assertEqual(session['oauth_request']['screen_hint'], '')
+        # An existing cookie alone cannot complete the new business registration.
+        self.assertEqual(self.complete().status_code, 401)
+        self.assertEqual(self.client.post('/api/register/options', json={'username': 'Alice', 'oauth': True}).status_code, 403)
+
     def test_invalid_client_cannot_unlock_registration(self):
         self.store.set_registration_settings(mode='open', enabled_until=None, default_demo_allowed=False)
         response = self.authorize(screen_hint='signup', login_hint='Alice', redirect_uri='https://evil.example')

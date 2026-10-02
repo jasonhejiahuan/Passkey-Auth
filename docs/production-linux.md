@@ -85,7 +85,7 @@ URL in chat, logs or screenshots.
 Schedule a daily backup using a dedicated systemd timer, and also back up before each release. Before replacing `current`, use Python's `sqlite3.Connection.backup()` to create an
 online snapshot of the auth database and, when present, the telemetry database.
 Do not copy a live SQLite file with `cp`. Write snapshots under a private timestamped
-directory in `/var/lib/jason-passkey-auth/backups`, verify `PRAGMA integrity_check`
+directory in `/var/backups/jason-passkey-auth`, verify `PRAGMA integrity_check`
 on each snapshot, and protect the environment/PPQ secret backups separately with
 the same access restrictions. Keep an off-host encrypted copy using the host's
 existing backup policy; do not invent a new external destination.
@@ -96,3 +96,5 @@ service. Restore database snapshots only as an explicit data-recovery operation,
 since restoring them can discard newly registered accounts and replay consumed
 one-time state. Verify a real Passkey login, code exchange, userinfo and PPQ return
 at the final HTTPS origins after release; loopback success alone is insufficient.
+
+The included `scripts/backup_service.py` and `deploy/jason-auth-backup.*` units implement a daily online backup for the auth database with 14 retained copies. Install the script as `/usr/local/sbin/backup-jason-auth.py`; the destination is root-owned and mode 0700. The separate telemetry database is currently disabled and requires extending the backup job if it is enabled. `deploy/nginx-auth.conf` is the TLS virtual-host template; enable it only after the named certificate exists. Its Cloudflare real-IP ranges were obtained from Cloudflare on 3 October 2026 and apply only to this virtual host.

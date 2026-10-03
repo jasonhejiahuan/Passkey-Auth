@@ -1,10 +1,7 @@
-name: Build desktop apps
+name: Build legacy desktop apps
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "V*"
 
 permissions:
   contents: read
@@ -39,8 +36,6 @@ jobs:
             artifact: Passkey-Auth-windows-x64
           - os: ubuntu-latest
             artifact: Passkey-Auth-linux-x64
-          - os: macos-15-intel
-            artifact: Passkey-Auth-macos-x64
           - os: macos-15
             artifact: Passkey-Auth-macos-arm64
     runs-on: ${{ matrix.os }}

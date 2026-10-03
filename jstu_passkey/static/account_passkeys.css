@@ -1,0 +1,62 @@
+.account-passkeys-trigger {
+  position: fixed;
+  inset-block-start: 24px;
+  inset-inline-end: 24px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.account-passkeys-trigger[hidden],
+.account-passkeys-dialog [hidden] { display: none; }
+.sidebar-actions #account-passkeys-button { display: block; min-height: 44px; font-size: 16px; }
+.account-passkeys-dialog {
+  box-sizing: border-box;
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid #d6d6d6;
+  border-radius: 20px;
+  color: #161616;
+  background: #fff;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+.account-passkeys-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.account-passkeys-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.account-passkeys-heading h2 { margin: 0; font-size: 24px; font-weight: 600; }
+.account-passkeys-dialog button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.account-passkeys-heading button { min-width: 44px; padding: 0; font-size: 24px; }
+.account-passkeys-dialog button:disabled { opacity: .5; cursor: default; }
+.account-passkeys-dialog button:focus-visible,
+.account-passkeys-trigger:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.account-passkeys-list { display: grid; gap: 16px; list-style: none; padding: 0; margin: 24px 0; }
+.account-passkeys-list li { display: grid; gap: 4px; padding-block-end: 16px; border-block-end: 1px solid #ddd; overflow-wrap: anywhere; }
+.account-passkeys-list time,
+.account-passkeys-list span { font-size: 16px; }
+.account-passkeys-destination { display: grid; gap: 8px; margin-block: 16px; }
+.account-passkeys-destination select { box-sizing: border-box; width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid #aaa; border-radius: 10px; color: inherit; background: inherit; font: inherit; }
+#account-passkeys-add { width: 100%; color: #fff; background: #161616; border-color: #161616; }
+#account-passkeys-status { display: block; margin: 16px 0; overflow-wrap: anywhere; }
+#account-passkeys-status[data-kind="error"] { color: #af2525; }
+@media (prefers-color-scheme: dark) {
+  .account-passkeys-dialog { color: #f0f0f0; background: #171717; border-color: #555; }
+  .account-passkeys-list li { border-color: #444; }
+  #account-passkeys-add { background: #f0f0f0; color: #171717; border-color: #f0f0f0; }
+  #account-passkeys-status[data-kind="error"] { color: #ffaaaa; }
+}

@@ -252,6 +252,46 @@ async function loginWithPasskey(options = {}) {
     showAuthenticatedStatus();
     return;
   }
+  if (!isHomePage()) {
+    redirectToPasskeyPage();
+    return;
+  }
+  if (sessionActionInProgress) {
+    return;
+  }
+  sessionActionInProgress = true;
+  try {
+    await runPasskeyAction(async () => {
+      const { authFlowToken } = await postJson("/auth/passkey/flow", {});
+      const { publicKey } = await postJson("/auth/passkey/options", {
+        username: options.username || "",
+        mode: "login",
+        authFlowToken,
+      });
+      const assertion = await navigator.credentials.get({
+        publicKey: decodeRequestOptions(publicKey),
+      });
+      if (!assertion) {
+        throw new DOMException("Passkey 验证已取消", "AbortError");
+      }
+      const verification = await postJson("/auth/passkey/verify", {
+        credential: encodeAuthenticationCredential(assertion),
+        authFlowToken,
+      });
+      if (verification.action_token) {
+        window.sessionStorage.setItem(
+          "passkey-action-token",
+          verification.action_token,
+        );
+      }
+      await refreshSession();
+    });
+  } finally {
+    sessionActionInProgress = false;
+  }
+}
+
+function redirectToPasskeyPage() {
   const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   const query = new URLSearchParams({ return_to: returnTo });
   window.location.assign(`/auth/passkey?${query}`);
@@ -269,6 +309,7 @@ async function refreshSession(options = {}) {
       throw new Error(data.error || "无法检查登录状态");
     }
     authenticatedUser = data.authenticated ? data.user : null;
+    updateAccountPasskeysEntry();
     if (authenticatedUser) {
       if (options.refreshNonHome && !isHomePage()) {
         window.location.reload();
@@ -288,6 +329,7 @@ async function refreshSession(options = {}) {
     }
   } catch (error) {
     authenticatedUser = null;
+    updateAccountPasskeysEntry();
     setStatus(error.message || String(error), "error");
   } finally {
     sessionReady = true;
@@ -298,6 +340,11 @@ async function ensureSessionReady() {
   if (!sessionReady) {
     await refreshSession();
   }
+}
+
+function updateAccountPasskeysEntry() {
+  const entry = document.querySelector("#account-passkeys-button");
+  if (entry) entry.hidden = !authenticatedUser;
 }
 
 function isHomePage() {
@@ -330,6 +377,7 @@ async function logout() {
     await postJson(apiPath("logout"), {});
     window.sessionStorage.removeItem("passkey-action-token");
     authenticatedUser = null;
+    updateAccountPasskeysEntry();
     setStatus("已退出登录", "success");
   } catch (error) {
     setStatus(error.message || String(error), "error");

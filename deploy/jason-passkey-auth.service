@@ -1,0 +1,22 @@
+[Unit]
+Description=Jason Passkey authentication service
+After=network.target
+
+[Service]
+User=jason-passkey-auth
+Group=jason-passkey-auth
+WorkingDirectory=/opt/jason-passkey-auth/current
+EnvironmentFile=/etc/jason-passkey-auth/service.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/jason-passkey-auth/current/.venv/bin/gunicorn --workers 1 --threads 4 --bind 127.0.0.1:5013 --timeout 30 --no-control-socket --error-logfile - jstu_passkey.app:app
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jason-passkey-auth
+
+[Install]
+WantedBy=multi-user.target

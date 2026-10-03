@@ -70,7 +70,7 @@ async function authorizeWithPasskey() {
       const target = new URL(root.dataset.errorRedirectUri);
       target.searchParams.set(
         "error",
-        isPasskeyCancelError(error) ? "access_denied" : "authentication_failed",
+        oauthErrorCode(error),
       );
       target.searchParams.set(
         "error_description",
@@ -100,7 +100,7 @@ async function postJson(url, body) {
   });
   const data = await readJsonResponse(response);
   if (!response.ok) {
-    throw new Error(data.error || "请求失败");
+    throw Object.assign(new Error(data.error || "请求失败"), {code: data.code, status: response.status});
   }
   return data;
 }
@@ -111,12 +111,7 @@ async function readJsonResponse(response) {
     return response.json();
   }
 
-  const text = await response.text();
-  const fallback = text ? text.slice(0, 160) : response.statusText;
-  return {
-    ok: false,
-    error: `服务器返回了非 JSON 响应：${response.status} ${fallback}`,
-  };
+  return {ok: false, code: "server_error", error: "认证服务暂时不可用"};
 }
 
 function decodeRequestOptions(options) {
@@ -174,6 +169,13 @@ function bufferToBase64url(buffer) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function oauthErrorCode(error) {
+  if (error?.code === "registration_not_allowed") return "registration_not_allowed";
+  if (error?.status >= 500 || error?.code === "server_error") return "server_error";
+  if (error instanceof TypeError) return "temporarily_unavailable";
+  return isPasskeyCancelError(error) ? "access_denied" : "authentication_failed";
 }
 
 function isPasskeyCancelError(error) {

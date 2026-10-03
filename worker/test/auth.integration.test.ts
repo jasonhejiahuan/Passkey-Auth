@@ -384,6 +384,24 @@ beforeEach(async () => {
 });
 
 describe("native authentication routes with real WebAuthn signatures", () => {
+  it("returns registration_not_allowed with intact state and preserves existing sign-in", async () => {
+    await signup();
+    await sql("UPDATE app_settings SET setting_value='closed' WHERE setting_key='registration_mode'");
+    const browser = new Browser();
+    const query = new URLSearchParams({response_type:'code',client_id:'ppq-test',redirect_uri:callback,state:'bound-closed-state',screen_hint:'signup',login_hint:'NewPerson',code_challenge:'a'.repeat(43),code_challenge_method:'S256'});
+    const denied=await browser.request('/oauth/authorize?'+query);
+    const target=new URL(denied.headers.get('location')!);
+    expect(target.origin+target.pathname).toBe(callback);
+    expect(target.searchParams.get('error')).toBe('registration_not_allowed');
+    expect(target.searchParams.get('state')).toBe('bound-closed-state');
+    expect((await (await browser.request('/api/ui/intent','POST',{intent:'register'})).json() as any).code).toBe('registration_not_allowed');
+    const client=await browser.request('/api/ui/register-client.js');
+    expect(await client.text()).toContain("code:'registration_not_allowed'");
+    query.set('login_hint','Alice');
+    const existing=await browser.request('/oauth/authorize?'+query);
+    expect(existing.status).toBe(200);
+    expect(await existing.text()).toContain('data-screen-hint=""');
+  });
   it("adds a second passkey to the same identity when signup is closed and both keys support named and discoverable login", async () => {
     const { browser, authenticator } = await signup();
     await signup("Other User");

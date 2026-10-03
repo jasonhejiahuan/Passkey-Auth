@@ -128,7 +128,7 @@ async function postJson(url, body) {
   });
   const data = await readJsonResponse(response);
   if (!response.ok) {
-    throw new Error(data.error || "请求失败");
+    throw Object.assign(new Error(data.error || "请求失败"), {code: data.code, status: response.status});
   }
   return data;
 }
@@ -139,12 +139,7 @@ async function readJsonResponse(response) {
     return response.json();
   }
 
-  const text = await response.text();
-  const fallback = text ? text.slice(0, 160) : response.statusText;
-  return {
-    ok: false,
-    error: `服务器返回了非 JSON 响应：${response.status} ${fallback}`,
-  };
+  return {ok: false, code: "server_error", error: "认证服务暂时不可用"};
 }
 
 function decodeCreationOptions(options) {

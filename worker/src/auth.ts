@@ -187,11 +187,9 @@ async function registerOptions(c: Context, data: any, recovery: string | null) {
     name = username(data.username),
     key = usernameKey(name),
     time = now();
-  if (
-    !recovery &&
-    (!registrationOpen(s) ||
-      Number(c.data.registration_unlock_expires_at || 0) <= time)
-  )
+  if (!recovery && !registrationOpen(s))
+    throw new HTTPError(403, "注册功能未启用", {code: "registration_not_allowed"});
+  if (!recovery && Number(c.data.registration_unlock_expires_at || 0) <= time)
     throw new HTTPError(403, "注册入口未解锁或已过期");
   const recoveryHash = recovery ? await hash(recovery) : null;
   if (
@@ -291,7 +289,7 @@ async function registerVerify(c: Context, data: any, recovery: string | null) {
   )
     throw new HTTPError(400, "管理员注册会话已过期");
   if (!recovery && !registrationOpen(s))
-    throw new HTTPError(403, "注册功能未启用");
+    throw new HTTPError(403, "注册功能未启用", {code: "registration_not_allowed"});
   let result;
   try {
     result = await verifyRegistrationResponse({
@@ -879,7 +877,7 @@ export async function auth(c: Context): Promise<Response | null> {
     const d = await body(c);
     if (d.intent !== "register") throw new HTTPError(400, "未知操作");
     if (!registrationOpen(await settings(c)))
-      throw new HTTPError(403, "注册功能未启用");
+      throw new HTTPError(403, "注册功能未启用", {code: "registration_not_allowed"});
     c.data.registration_unlock_expires_at = now() + 120;
     await saveData(c);
     return json({
@@ -893,8 +891,13 @@ export async function auth(c: Context): Promise<Response | null> {
     });
   }
   if (method === "GET" && path === "/api/ui/register-client.js") {
+    // Denied module preserves the reason if the gate closes before lazy import.
+    // No ceremony code or registration authority is exposed.
+    if (!registrationOpen(await settings(c)))
+      return new Response("export async function createPasskey(){throw Object.assign(new Error('注册功能未启用'),{code:'registration_not_allowed'});}", {
+        headers: {"Content-Type": "application/javascript", "Cache-Control": "no-store"},
+      });
     if (
-      !registrationOpen(await settings(c)) ||
       Number(c.data.registration_unlock_expires_at || 0) <= now()
     )
       return new Response("throw new Error('注册入口未解锁或已过期');", {

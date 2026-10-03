@@ -187,7 +187,7 @@ async function authorize(c: Context) {
       usernameKey(name),
     ));
   if (create && !registrationOpen(await settings(c)))
-    return err("access_denied", "注册功能未启用");
+    return err("registration_not_allowed", "注册功能未启用");
   const requestId = random(),
     time = now();
   await ensureSession(c);

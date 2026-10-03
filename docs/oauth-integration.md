@@ -108,3 +108,20 @@ Cloudflare 初始化见 [部署文档](cloudflare-native.md)。`PASSKEY_RP_ID`�
 - 不提供密码登录、隐式授权、refresh token、开放跳转或任意 Origin CORS。
 
 实现索引：`worker/src/auth.ts`、`oauth.ts`、`management.ts`、`store.ts`、`worker/migrations/`。正常开发用 `npm run dev`；API 安全回归在真实 workerd/D1 上运行。
+
+### Authorization failures
+
+For a validated redirect URI, `/oauth/authorize` returns `error=registration_not_allowed`
+when `screen_hint=signup` names a new identity and registration is closed. The
+original `state` is preserved. An existing identity can still authenticate while
+registration is closed. A gate closed during the ceremony produces the same code;
+`/api/register/options`, `/api/register/verify` and `/api/ui/intent` include it in
+JSON as `code` alongside their existing human-readable `error` and HTTP 403.
+
+The OAuth UI reports `access_denied` for a dismissed Passkey prompt,
+`authentication_failed` for verification failures, and `server_error` or
+`temporarily_unavailable` for provider/network failures. Clients must validate and
+consume their browser-bound state before displaying any callback error, use an
+allowlist of codes, and never present all failures as user cancellation. Do not
+render upstream HTML bodies or raw error descriptions. No callback path, token
+exchange, stable subject, scope, PKCE or legacy error-return routing changed.

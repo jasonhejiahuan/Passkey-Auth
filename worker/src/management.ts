@@ -107,6 +107,7 @@ function channelPayload(ch: Channel) {
   return {
     channel_id: ch.id,
     server_nonce: ch.server_nonce,
+    nonce_mode: "ack",
     ack_after_ms: ch.ack_after_ms,
     min_ack_after_ms: 30000,
     max_ack_after_ms: 300000,
@@ -493,7 +494,7 @@ async function listUsers(c: Context): Promise<any[]> {
       "SELECT u.*,(SELECT MAX(created_at) FROM login_history l WHERE l.user_id=u.id AND result='success') last_login_at FROM users u ORDER BY id",
     ),
     c.store.all<any>(
-      "SELECT id,user_id,created_at,updated_at,device_type,backed_up,transports,aaguid FROM credentials ORDER BY id",
+      "SELECT id,user_id,created_at,updated_at,device_type,backed_up,transports,aaguid,disabled_at FROM credentials ORDER BY id",
     ),
     c.store.all<any>("SELECT user_id,mode FROM user_platform_policies"),
     c.store.all<any>(
@@ -513,6 +514,7 @@ async function listUsers(c: Context): Promise<any[]> {
       backedUp: !!cr.backed_up,
       transports: parseJSON(cr.transports, []),
       aaguid: cr.aaguid,
+      disabledAt: cr.disabled_at,
     });
     cm.set(cr.user_id, rows);
   }
@@ -529,6 +531,9 @@ async function listUsers(c: Context): Promise<any[]> {
     disabledAt: u.disabled_at,
     sessionVersion: u.session_version,
     credentialCount: (cm.get(u.id) || []).length,
+    activeCredentialCount: (cm.get(u.id) || []).filter(
+      (credential) => credential.disabledAt === null,
+    ).length,
     lastLoginAt: u.last_login_at,
     permissions: permissions(u),
     platformPolicy: {
@@ -722,43 +727,36 @@ async function channels(c: Context): Promise<Response> {
   }
   if (path.endsWith("/events") && c.request.method === "GET") {
     const ch = await getChannel(c);
-    const nonce = random(24),
-      auth = actorCondition(c);
-    try {
-      await c.store.guardBatch(
-        auth.sql +
-          " AND EXISTS(SELECT 1 FROM management_channels WHERE id=? AND session_hash=? AND expires_at>?)",
-        [...auth.bindings, ch.id, c.session.token_hash, now()],
-        [
-          c.env.DB.prepare(
-            "UPDATE management_channels SET server_nonce=? WHERE id=?",
-          ).bind(nonce, ch.id),
-        ],
-      );
-    } catch (e) {
-      if (e instanceof StoreConflict)
-        return new Response(
-          "event: reauth\ndata: " +
-            JSON.stringify({
-              ok: false,
-              reason: "channel_expired",
-              reauth_required: true,
-            }) +
-            "\n\n",
-          {
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-store",
-            },
+    const auth = actorCondition(c);
+    // A delayed SSE response must not invalidate an in-flight signed request.
+    // Only a successfully acknowledged proof rotates the nonce, atomically.
+    const current = await c.store.one<Channel>(
+      `SELECT * FROM management_channels WHERE id=? AND session_hash=? AND expires_at>? AND (${auth.sql})`,
+      ch.id,
+      c.session.token_hash,
+      now(),
+      ...auth.bindings,
+    );
+    if (!current)
+      return new Response(
+        "event: reauth\ndata: " +
+          JSON.stringify({
+            ok: false,
+            reason: "channel_expired",
+            reauth_required: true,
+          }) +
+          "\n\n",
+        {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-store",
           },
-        );
-      throw e;
-    }
-    ch.server_nonce = nonce;
+        },
+      );
     // A bounded SSE response preserves EventSource's native reconnect contract
     // while avoiding a 30-minute invocation accumulating CPU and D1 queries.
     return new Response(
-      `retry: ${ch.ack_after_ms}\nevent: challenge\ndata: ${JSON.stringify(channelPayload(ch))}\n\n`,
+      `retry: ${current.ack_after_ms}\nevent: challenge\ndata: ${JSON.stringify(channelPayload(current))}\n\n`,
       {
         headers: {
           "Content-Type": "text/event-stream",
@@ -775,15 +773,16 @@ async function channels(c: Context): Promise<Response> {
     const proof = await verifyProof(ch, "ack", "POST", path, data),
       pc = proofCondition(proof),
       auth = actorCondition(c),
-      interval = adaptiveAck(data);
+      interval = adaptiveAck(data),
+      nonce = random(24);
     try {
       await c.store.guardBatch(
         `${auth.sql} AND ${pc.sql}`,
         [...auth.bindings, ...pc.bindings],
         [
           c.env.DB.prepare(
-            "UPDATE management_channels SET last_counter=?,last_seen_at=?,ack_after_ms=? WHERE id=?",
-          ).bind(proof.counter, now(), interval, ch.id),
+            "UPDATE management_channels SET last_counter=?,last_seen_at=?,ack_after_ms=?,server_nonce=? WHERE id=?",
+          ).bind(proof.counter, now(), interval, nonce, ch.id),
         ],
       );
     } catch (e) {
@@ -792,6 +791,8 @@ async function channels(c: Context): Promise<Response> {
     }
     ch.last_seen_at = now();
     ch.ack_after_ms = interval;
+    ch.last_counter = proof.counter;
+    ch.server_nonce = nonce;
     return json({ ok: true, ...channelPayload(ch) });
   }
   throw new HTTPError(404, "接口不存在");
@@ -805,7 +806,11 @@ export async function management(c: Context): Promise<Response | null> {
   admin(c);
   if (path === "/management" && method === "GET")
     return new Response(
-      renderPage("management.html", { csrf_token: c.session.csrf_token }),
+      renderPage("management.html", {
+        csrf_token: c.session.csrf_token,
+        account_passkeys_enabled: true,
+        account_signed_in: true,
+      }),
       {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -928,7 +933,13 @@ export async function management(c: Context): Promise<Response | null> {
       }
       return response;
     }
-    if (c.user!.id === id)
+    if (
+      c.user!.id === id &&
+      !(
+        operation?.startsWith("credentials/") &&
+        (method === "DELETE" || method === "PATCH")
+      )
+    )
       throw new HTTPError(
         409,
         method === "DELETE"
@@ -962,33 +973,77 @@ export async function management(c: Context): Promise<Response | null> {
         condition: targetGuard,
         bindings: targetBindings,
       });
-    if (operation?.startsWith("credentials/") && method === "DELETE") {
+    if (
+      operation?.startsWith("credentials/") &&
+      (method === "DELETE" || method === "PATCH")
+    ) {
       const credentialId = Number(operation.split("/")[1]);
+      const credential = await c.store.one<{ disabled_at: number | null }>(
+        "SELECT disabled_at FROM credentials WHERE id=? AND user_id=?",
+        credentialId,
+        id,
+      );
+      if (!credential) throw new HTTPError(404, "Passkey 不存在");
+      let disabled: boolean | undefined;
+      if (method === "PATCH") {
+        const data = await body(c);
+        if (typeof data.disabled !== "boolean")
+          throw new HTTPError(400, "Passkey 启停状态必须是布尔值");
+        disabled = data.disabled;
+      }
+      const removesOwnActiveKey =
+        c.user!.id === id &&
+        credential.disabled_at === null &&
+        (method === "DELETE" || disabled === true);
+      const remainingKeyGuard =
+        "EXISTS(SELECT 1 FROM credentials WHERE user_id=? AND id!=? AND disabled_at IS NULL)";
       if (
+        removesOwnActiveKey &&
         !(await c.store.one(
-          "SELECT id FROM credentials WHERE id=? AND user_id=?",
-          credentialId,
+          "SELECT id FROM credentials WHERE user_id=? AND id!=? AND disabled_at IS NULL LIMIT 1",
           id,
+          credentialId,
         ))
       )
-        throw new HTTPError(404, "Passkey 不存在");
+        throw new HTTPError(409, "至少保留一个已启用的 Passkey");
       return write({
         statements: [
-          c.env.DB.prepare(
-            "DELETE FROM credentials WHERE id=? AND user_id=?",
-          ).bind(credentialId, id),
+          method === "DELETE"
+            ? c.env.DB.prepare(
+                "DELETE FROM credentials WHERE id=? AND user_id=?",
+              ).bind(credentialId, id)
+            : c.env.DB.prepare(
+                "UPDATE credentials SET disabled_at=?,updated_at=? WHERE id=? AND user_id=?",
+              ).bind(
+                disabled ? (credential.disabled_at ?? now()) : null,
+                now(),
+                credentialId,
+                id,
+              ),
           c.env.DB.prepare(
             "UPDATE users SET session_version=session_version+1 WHERE id=?",
           ).bind(id),
         ],
-        action: "credential.delete",
+        action:
+          method === "DELETE"
+            ? "credential.delete"
+            : disabled
+              ? "credential.disable"
+              : "credential.enable",
         targetType: "user",
         targetId: String(id),
         details: { credentialId },
         condition:
           targetGuard +
-          " AND EXISTS(SELECT 1 FROM credentials WHERE id=? AND user_id=?)",
-        bindings: [...targetBindings, credentialId, id],
+          " AND EXISTS(SELECT 1 FROM credentials WHERE id=? AND user_id=? AND disabled_at IS ?)" +
+          (removesOwnActiveKey ? ` AND ${remainingKeyGuard}` : ""),
+        bindings: [
+          ...targetBindings,
+          credentialId,
+          id,
+          credential.disabled_at,
+          ...(removesOwnActiveKey ? [id, credentialId] : []),
+        ],
       });
     }
   }

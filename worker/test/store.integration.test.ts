@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import { readMigrations } from "./migrations";
 
 // Execute the real Store inside workerd, against Miniflare's D1 binding.
 // This privileged fixture is bundled only for tests; it is never an app route.
@@ -108,10 +108,7 @@ beforeAll(async () => {
   address = String(await runtime.ready).replace(/\/$/, "");
   const response = await fetch(`${address}/migration`, {
     method: "POST",
-    body: await readFile(
-      new URL("../migrations/0001_native_auth.sql", import.meta.url),
-      "utf8",
-    ),
+    body: await readMigrations(),
   });
   expect(response.ok, await response.text()).toBe(true);
 }, 30_000);

@@ -1,7 +1,7 @@
 /** Local-only browser acceptance run. No external account, database or credential. */
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,13 +24,17 @@ const hash = (value) => createHash("sha256").update(value).digest("base64url");
 const recoveryToken = randomBytes(32).toString("base64url");
 const clientSecret = randomBytes(32).toString("base64url");
 const clientId = "browser-acceptance-client";
+let learnerName = "Browser Learner";
 const redirectUri = `${origin}/test/browser/callback`;
 const observedErrors = [];
 const telemetryRequests = [];
 const failedResponses = [];
 let worker, browser;
 let currentPage;
+let releaseHeldAck;
 let screenshotCount = 0;
+const devices = new WeakMap();
+const keyTransports = new Map();
 
 async function capture(page, name) {
   await page
@@ -53,7 +57,7 @@ async function capture(page, name) {
   );
 }
 
-async function newPage() {
+async function newPage(transport = "internal") {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     colorScheme: "light",
@@ -81,16 +85,39 @@ async function newPage() {
   });
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
+  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
     options: {
       protocol: "ctap2",
-      transport: "internal",
+      transport,
       hasResidentKey: true,
       hasUserVerification: true,
       isUserVerified: true,
       automaticPresenceSimulation: true,
     },
   });
+  devices.set(page, { cdp, authenticatorId });
+  return page;
+}
+
+async function virtualCredentials(page) {
+  const { cdp, authenticatorId } = devices.get(page);
+  return (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials;
+}
+
+async function freshKeyLogin(credential, succeeds = true) {
+  const page = await newPage(keyTransports.get(credential.credentialId) || "internal");
+  const { cdp, authenticatorId } = devices.get(page);
+  await cdp.send("WebAuthn.addCredential", { authenticatorId, credential });
+  const verified = page.waitForResponse(response =>
+    new URL(response.url()).pathname === "/auth/passkey/verify");
+  await page.goto(`${origin}/auth/passkey?return_to=/`);
+  const response = await verified;
+  assert.equal(response.ok(), succeeds, succeeds ? "Stored Passkey signs in" : "Disabled/deleted Passkey cannot sign in");
+  if (succeeds) {
+    await page.waitForURL(url => url.pathname === "/");
+    assert.equal((await (await page.request.get(`${origin}/api/me`)).json()).user.username, learnerName);
+  }
+  Object.assign(credential, (await virtualCredentials(page))[0]);
   return page;
 }
 
@@ -112,7 +139,7 @@ async function oauthSignIn(page, signup) {
     state,
     code_challenge: hash(verifier),
     code_challenge_method: "S256",
-    ...(signup ? { screen_hint: "signup", login_hint: "Browser Learner" } : {}),
+    ...(signup ? { screen_hint: "signup", login_hint: learnerName } : {}),
   });
   await page.goto(`${origin}/oauth/authorize?${query}`);
   await page.waitForURL((url) => url.pathname === "/test/browser/callback");
@@ -139,7 +166,7 @@ async function oauthSignIn(page, signup) {
   });
   assert.equal(userinfoResponse.status(), 200, "Authenticated userinfo");
   const userinfo = await userinfoResponse.json();
-  assert.equal(userinfo.username, "Browser Learner");
+  assert.equal(userinfo.username, learnerName);
   assert.equal(typeof userinfo.sub, "string");
   await page.unroute(`${redirectUri}**`);
   return userinfo;
@@ -196,18 +223,11 @@ try {
   );
   await worker.ready;
   const db = await worker.getD1Database("DB");
-  const schema = await readFile(
-    path.join(workerRoot, "migrations/0001_native_auth.sql"),
-    "utf8",
-  );
-  await db.batch(
-    schema
-      .replace(/--[^\n]*/g, "")
-      .split(";")
-      .map((sql) => sql.trim())
-      .filter(Boolean)
-      .map((sql) => db.prepare(sql)),
-  );
+  for (const migration of (await readdir(path.join(workerRoot, "migrations"))).filter(name => name.endsWith(".sql")).sort()) {
+    const schema = await readFile(path.join(workerRoot, "migrations", migration), "utf8");
+    await db.batch(schema.replace(/--[^\n]*/g, "").split(";")
+      .map(sql => sql.trim()).filter(Boolean).map(sql => db.prepare(sql)));
+  }
   const now = Math.floor(Date.now() / 1000);
   await db.batch([
     db
@@ -250,7 +270,7 @@ try {
       ),
   ]);
   browser = await chromium.launch({ channel: "chrome", headless: true });
-  const admin = await newPage();
+  let admin = await newPage();
   await admin.goto(origin);
   await expect(admin.locator("#logo-button")).toBeVisible();
   await capture(admin, "desktop-home");
@@ -381,7 +401,7 @@ try {
     await learner.goto(`${origin}/demo/${demo}`);
     await capture(learner, `mobile-demo-${demo}`);
     if (demo === "link-login") {
-      await learner.locator("#username").fill("Browser Learner");
+      await learner.locator("#username").fill(learnerName);
       const started = learner.waitForResponse(
         (response) =>
           new URL(response.url()).pathname === "/demo/link-login/start",
@@ -465,18 +485,245 @@ try {
     1,
     "Logo login starts only one WebAuthn ceremony",
   );
+  // Existing account enrollment is independent of new-account registration.
+  currentPage = admin;
+  await admin.locator('[data-view="settings"]').click();
+  const registrationClosed = admin.waitForResponse(response =>
+    new URL(response.url()).pathname === "/api/management/settings/registration" && response.request().method() === "PATCH");
+  await admin.locator('#registration-settings [name="mode"]').selectOption("closed");
+  assert.equal((await registrationClosed).status(), 200);
+  const target = await db.prepare("SELECT id,user_handle FROM users WHERE username=?").bind(learnerName).first();
+  const originalKey = await db.prepare("SELECT * FROM credentials WHERE user_id=?").bind(target.id).first();
+  const adminKey = await db.prepare("SELECT cr.id FROM credentials cr JOIN users u ON u.id=cr.user_id WHERE u.username=?").bind("Browser Administrator").first();
+  await db.prepare("UPDATE sessions SET reauthenticated_at=0 WHERE user_id=?").bind(target.id).run();
+  currentPage = learner;
+  await learner.goto(origin);
+  await learner.locator("#account-passkeys-button").click();
+  await expect(learner.locator("#account-passkeys-add")).toBeEnabled();
+  await expect(learner.locator("#account-passkeys-list li")).toHaveCount(1);
+  await learner.locator("#account-passkeys-authenticator").selectOption("security-key");
+  let firstDeviceKey, secondDeviceKey;
+  const enrollmentStatuses = [];
+  const reauthModes = [];
+  learner.on("request", request => {
+    if (new URL(request.url()).pathname === "/auth/passkey/options")
+      reauthModes.push(request.postDataJSON()?.mode);
+  });
+  const optionsRoute = `${origin}/api/account/passkeys/options`;
+  await learner.route(optionsRoute, async route => {
+    const response = await route.fetch();
+    enrollmentStatuses.push(response.status());
+    if (response.ok()) {
+      const data = await response.json();
+      assert.equal(data.publicKey.user.id, target.user_handle);
+      assert.equal(data.publicKey.user.displayName, learnerName);
+      assert.equal(data.publicKey.authenticatorSelection.userVerification, "required");
+      assert.deepEqual(data.publicKey.excludeCredentials.map(item => item.id), [originalKey.credential_id]);
+      firstDeviceKey = (await virtualCredentials(learner))[0];
+      keyTransports.set(firstDeviceKey.credentialId, "internal");
+      assert.equal(data.publicKey.authenticatorSelection.authenticatorAttachment, "cross-platform", "Security-key choice requests an external authenticator");
+      assert.deepEqual(data.publicKey.hints, ["security-key"]);
+      const device = devices.get(learner);
+      // Disconnect the first virtual device only after its real UV reauthentication.
+      await device.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: device.authenticatorId });
+      const added = await device.cdp.send("WebAuthn.addVirtualAuthenticator", { options: {
+        protocol: "ctap2", transport: "usb", hasResidentKey: true,
+        hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
+      } });
+      device.authenticatorId = added.authenticatorId;
+    }
+    await route.fulfill({ response });
+  });
+  const enrolled = learner.waitForResponse(response => new URL(response.url()).pathname === "/api/account/passkeys/verify");
+  await learner.locator("#account-passkeys-add").click();
+  const enrollmentResponse = await enrolled;
+  assert.equal(enrollmentResponse.status(), 200);
+  assert.equal(enrollmentResponse.request().postDataJSON().credential.authenticatorAttachment, "cross-platform");
+  await expect(learner.locator("#account-passkeys-list li")).toHaveCount(2);
+  await learner.unroute(optionsRoute);
+  assert.deepEqual(enrollmentStatuses, [403, 200], "Expired UV is refreshed inline before enrollment");
+  assert.deepEqual(reauthModes, ["reauth"]);
+  assert.equal(new URL(learner.url()).pathname, "/", "Inline reauthentication keeps the original page");
+  secondDeviceKey = (await virtualCredentials(learner))[0];
+  keyTransports.set(secondDeviceKey.credentialId, "usb");
+  const accountKeys = async page => {
+    const response = await page.request.get(`${origin}/api/account/passkeys`);
+    assert.equal(response.status(), 200);
+    const data = await response.json();
+    assert.equal(data.username, learnerName);
+    return data.passkeys;
+  };
+  const keys = await accountKeys(learner);
+  const secondKeyId = keys.find(key => key.id !== originalKey.id)?.id;
+  assert.ok(secondKeyId);
+  for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
+    await learner.setViewportSize(viewport);
+    assert.equal(await learner.locator("#account-passkeys-dialog").evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return element.scrollWidth <= element.clientWidth && rect.left >= 0 && rect.right <= innerWidth;
+    }), true, "Passkeys dialog fits its viewport");
+    await capture(learner, `${name}-account-passkeys`);
+  }
+  await learner.evaluate(() => {
+    const create = navigator.credentials.create.bind(navigator.credentials);
+    navigator.credentials.create = async function (...args) {
+      navigator.credentials.create = create;
+      throw new DOMException("Cancelled by test user", "NotAllowedError");
+    };
+  });
+  await learner.locator("#account-passkeys-add").click();
+  await expect(learner.locator("#account-passkeys-status")).toHaveText("已取消");
+  await expect(learner.locator("#account-passkeys-add")).toBeEnabled();
+  assert.equal((await accountKeys(learner)).length, 2, "Cancelling enrollment adds no database credential");
+  await learner.locator("#account-passkeys-close").click();
+  await expect(learner.locator("#account-passkeys-dialog")).not.toBeVisible();
+  await expect(learner.locator("#logo-button .logo")).toBeVisible();
+  assert.equal(await learner.locator("#logo-button").evaluate(element => Number(getComputedStyle(element).opacity) > 0.8), true);
+  await capture(learner, "mobile-home-after-passkeys-close");
+  const secondSession = await freshKeyLogin(secondDeviceKey);
+  assert.deepEqual((await accountKeys(secondSession)).map(key => key.id), keys.map(key => key.id));
+  const sameIdentity = await oauthSignIn(secondSession, false);
+  assert.equal(sameIdentity.sub, firstIdentity.sub, "Second device preserves the OAuth identity");
+  Object.assign(secondDeviceKey, (await virtualCredentials(secondSession))[0]);
+
+  currentPage = admin;
+  await admin.goto(`${origin}/management`);
+  await expect(admin.locator("#account-passkeys-button")).toBeVisible();
+  await db.prepare("UPDATE sessions SET reauthenticated_at=0 WHERE user_id=(SELECT id FROM users WHERE username=?)").bind("Browser Administrator").run();
+  await admin.locator("#account-passkeys-button").click();
+  await expect(admin.locator("#account-passkeys-list li")).toHaveCount(1);
+  await expect(admin.locator("#account-passkeys-add")).toBeEnabled();
+  await admin.evaluate(() => {
+    const create = navigator.credentials.create.bind(navigator.credentials);
+    navigator.credentials.create = async function () {
+      navigator.credentials.create = create;
+      throw new DOMException("Cancelled by test user", "NotAllowedError");
+    };
+  });
+  const adminReauthenticated = admin.waitForResponse(response => new URL(response.url()).pathname === "/auth/passkey/verify");
+  await admin.locator("#account-passkeys-add").click();
+  assert.equal((await adminReauthenticated).status(), 200);
+  await expect(admin.locator("#account-passkeys-status")).toHaveText("已取消");
+  await expect(admin.locator("#account-passkeys-list li")).toHaveCount(1);
+  assert.equal(new URL(admin.url()).pathname, "/management", "Management reauthentication stays inline");
+  for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
+    await admin.setViewportSize(viewport);
+    assert.equal(await admin.locator("#account-passkeys-dialog").evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return element.scrollWidth <= element.clientWidth && rect.left >= 0 && rect.right <= innerWidth;
+    }), true, "Management Passkeys dialog fits its viewport");
+    await capture(admin, `${name}-management-account-passkeys`);
+  }
+  await admin.locator("#account-passkeys-close").click();
+  await admin.locator('[data-view="users"]').click();
+  async function manageSecondKey(action) {
+    currentPage = admin;
+    await admin.locator(`[data-edit-user="${target.id}"]`).click();
+    const endpoint = `/api/management/users/${target.id}/credentials/${secondKeyId}`;
+    const response = admin.waitForResponse(response => new URL(response.url()).pathname === endpoint && response.request().method() === (action === "delete" ? "DELETE" : "PATCH"));
+    if (action === "delete") admin.once("dialog", dialog => dialog.accept());
+    const button = admin.locator(action === "delete" ? `[data-delete-credential="${secondKeyId}"]` : `[data-toggle-credential="${secondKeyId}"]`);
+    if (action !== "delete") await expect(button).toHaveAttribute("data-next-disabled", String(action === "disable"));
+    await button.click();
+    if (releaseHeldAck) {
+      // Real user intent arrives while an earlier signed ACK is still in flight.
+      await new Promise(resolve => setTimeout(resolve, 75));
+      const release = releaseHeldAck;
+      releaseHeldAck = null;
+      release();
+    }
+    assert.equal((await response).status(), 200, `Administrator can ${action} the selected credential`);
+    await expect(admin.locator("#editor-dialog")).not.toBeVisible();
+    assert.equal((await db.prepare("SELECT disabled_at FROM credentials WHERE id=?").bind(originalKey.id).first()).disabled_at, null);
+    assert.ok(await db.prepare("SELECT id FROM credentials WHERE id=?").bind(adminKey.id).first(), "Administrator's own credential remains unchanged");
+  }
+  await manageSecondKey("disable");
+  await freshKeyLogin(secondDeviceKey, false);
+  await freshKeyLogin(firstDeviceKey);
+  await manageSecondKey("enable");
+  await freshKeyLogin(secondDeviceKey);
+
+  // Match the remote path: a recovery-created administrator, a page reload,
+  // and its first signed mutation without a prior inline reauthentication.
+  const freshGrant = randomBytes(32).toString("base64url");
+  const freshTime = Math.floor(Date.now() / 1000);
+  await db.prepare("INSERT INTO admin_recovery_tokens(token_hash,created_at,expires_at) VALUES(?,?,?)").bind(hash(freshGrant), freshTime, freshTime + 600).run();
+  learnerName = "native-passkeys-local-acceptance-01234567-member";
+  await db.prepare("UPDATE users SET admin=1,username=? WHERE id=?").bind(learnerName, target.id).run();
+  admin = await newPage();
+  await admin.goto(`${origin}/${freshGrant}`);
+  await admin.locator("#recovery-username").fill("native-passkeys-local-acceptance-01234567-admin");
+  await admin.locator("#recovery-form button").click();
+  await admin.waitForURL(url => url.pathname === "/management");
+  await expect(admin.locator("#overview-summary .metric-card").first()).toBeVisible();
+  let delayedAck, ackHeld;
+  let ackDelivered = false, writeBeforeAck = false;
+  if (process.env.PASSKEY_BROWSER_DELAY_CHANNEL === "1") {
+    let acknowledgeHeld;
+    ackHeld = new Promise(resolve => { acknowledgeHeld = resolve; });
+    let heldOnce = false;
+    await admin.route(`${origin}/api/management/channel/events**`, async route => {
+      try {
+        const response = await route.fetch();
+        await new Promise(resolve => setTimeout(resolve, 600));
+        await route.fulfill({ response });
+      } catch { /* A previous document may close during the explicit reload. */ }
+    });
+    await admin.route(`${origin}/api/management/channel/ack`, async route => {
+      const response = await route.fetch();
+      if (!heldOnce) {
+        heldOnce = true;
+        const release = new Promise(resolve => { releaseHeldAck = resolve; });
+        acknowledgeHeld();
+        await release;
+        ackDelivered = true;
+      }
+      await route.fulfill({ response });
+    });
+    admin.on("request", request => {
+      if (new URL(request.url()).pathname.includes("/credentials/") && !ackDelivered) writeBeforeAck = true;
+    });
+    delayedAck = admin.waitForResponse(response => new URL(response.url()).pathname === "/api/management/channel/ack");
+    void delayedAck.catch(() => {});
+  }
+  await admin.goto(`${origin}/management`);
+  if (ackHeld) await ackHeld;
+  await admin.locator("#account-passkeys-button").click();
+  await expect(admin.locator("#account-passkeys-list li")).toHaveCount(1);
+  await admin.setViewportSize({ width: 390, height: 844 });
+  await admin.locator("#account-passkeys-close").click();
+  await admin.locator('[data-view="users"]').click();
+  await manageSecondKey("disable");
+  if (delayedAck) {
+    const response = await delayedAck;
+    const data = await response.json();
+    const reasons = ["channel_signature_invalid", "channel_replay", "channel_proof_missing", "channel_missing"];
+    console.log("Delayed channel diagnostic:", { status: response.status(), reason: reasons.includes(data.reason) ? data.reason : "other-or-none", writeBeforeAck });
+    assert.equal(response.status(), 200, "Delayed SSE must not invalidate the first management acknowledgement");
+    assert.equal(writeBeforeAck, false, "A management write must wait for the earlier signed ACK response");
+  }
+  await freshKeyLogin(secondDeviceKey, false);
+  await freshKeyLogin(firstDeviceKey);
+  await manageSecondKey("enable");
+  await freshKeyLogin(secondDeviceKey);
+  await manageSecondKey("delete");
+  await freshKeyLogin(secondDeviceKey, false);
+  await freshKeyLogin(firstDeviceKey);
+  assert.equal((await db.prepare("SELECT COUNT(*) n FROM credentials WHERE user_id=?").bind(target.id).first()).n, 1);
+  assert.equal((await db.prepare("SELECT setting_value FROM app_settings WHERE setting_key='registration_mode'").first()).setting_value, "closed");
   assert.deepEqual(
     telemetryRequests,
     [],
     "Disabled telemetry creates no browser work",
   );
+  assert.deepEqual(failedResponses.filter(response => response.status >= 500), [], "No server failures during browser acceptance");
   assert.deepEqual(
     observedErrors,
     [],
     "No uncaught application JavaScript errors",
   );
   console.log(
-    `Browser acceptance passed: original UI, ${screenshotCount} screenshots, recovery, management autosave/CSV, home registration, OAuth PKCE/userinfo and existing-user signup.`,
+    `Browser acceptance passed: original UI, ${screenshotCount} screenshots, recovery, management autosave/CSV, home registration, OAuth PKCE/userinfo, existing-user signup, two-device Passkeys and per-key administration.`,
   );
 } catch (error) {
   if (currentPage)
@@ -485,11 +732,12 @@ try {
         /\/[\w-]{32,}/g,
         "/[redacted]",
       ),
-      messages: await currentPage.locator("output").allTextContents(),
+      messages: await currentPage.locator("output").allTextContents().catch(() => []),
       failedResponses,
     });
   throw error;
 } finally {
+  releaseHeldAck?.();
   await browser?.close();
   await worker?.dispose();
   // Removes all synthetic users, credentials, cookies and test database state.

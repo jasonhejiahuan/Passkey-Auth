@@ -14,12 +14,16 @@ let overviewFilter = null;
 let telemetryFilter = null;
 let settingsSaveChain = Promise.resolve();
 let statusTimer = null;
+let managementChannelStart = null;
+let managementChannelEpoch = 0;
+let managementOperations = Promise.resolve();
 let managementChannel = {
   active: false,
   channelId: "",
   keyPair: null,
   counter: 0,
   serverNonce: "",
+  nonceMode: "sse",
   eventSource: null,
   ackTimer: null,
 };
@@ -53,7 +57,13 @@ document.querySelectorAll("[data-clear-log]").forEach((button) => {
 });
 showViewFromHash();
 loadOverview();
-void startManagementChannel();
+void startManagementChannel().catch(() => {});
+document.addEventListener("passkey-credentials-changed", () => {
+  void loadOverview();
+});
+document.addEventListener("passkey-reauthenticated", () => {
+  actionToken = window.sessionStorage.getItem(ACTION_TOKEN_STORAGE_KEY) || "";
+});
 
 async function loadOverview() {
   try {
@@ -440,6 +450,8 @@ function sameValues(left, right) {
 
 function openUser(userId) {
   const user = state.users.find((item) => item.id === userId);
+  const ownAccount = user.id === state.currentUserId;
+  const activeCredentialCount = user.credentials.filter((credential) => credential.disabledAt == null).length;
   editorTitle.textContent = `管理 ${user.username}`;
   editorContent.innerHTML = `
     <section class="editor-section">
@@ -478,9 +490,18 @@ function openUser(userId) {
       <h3>Passkey</h3>
       ${user.credentials.length ? user.credentials.map((credential) => `
         <div class="credential-card">
-          <strong>${escapeHtml(credential.deviceType || "Passkey")}</strong>
-          <p class="muted">${formatTime(credential.createdAt)} · ${credential.backedUp ? "已备份" : "未备份"}</p>
-          <button type="button" class="danger-button" data-delete-credential="${credential.id}">删除 Passkey</button>
+          <strong>Passkey #${credential.id}</strong>
+          <p>${escapeHtml(credential.deviceType || "Passkey")} · ${credential.disabledAt == null ? "已启用" : "已停用"}</p>
+          <p>创建时间：${formatTime(credential.createdAt)} · ${credential.backedUp ? "已备份" : "未备份"}</p>
+          <div class="editor-actions">
+            <button type="button" data-toggle-credential="${credential.id}"
+              data-next-disabled="${credential.disabledAt == null}"
+              aria-label="${credential.disabledAt == null ? "停用" : "启用"} Passkey #${credential.id}"
+              ${ownAccount && credential.disabledAt == null && activeCredentialCount <= 1 ? "disabled" : ""}>${credential.disabledAt == null ? "停用" : "启用"}</button>
+            <button type="button" class="danger-button" data-delete-credential="${credential.id}"
+              aria-label="删除 Passkey #${credential.id}"
+              ${ownAccount && credential.disabledAt == null && activeCredentialCount <= 1 ? "disabled" : ""}>删除</button>
+          </div>
         </div>
       `).join("") : '<p class="muted">没有 Passkey</p>'}
     </section>
@@ -496,6 +517,11 @@ function openUser(userId) {
   document.querySelector("#delete-user").addEventListener("click", () => deleteUser(user));
   document.querySelectorAll("[data-delete-credential]").forEach((button) => {
     button.addEventListener("click", () => deleteCredential(user, Number(button.dataset.deleteCredential)));
+  });
+  document.querySelectorAll("[data-toggle-credential]").forEach((button) => {
+    button.addEventListener("click", () => toggleCredential(
+      user, Number(button.dataset.toggleCredential), button.dataset.nextDisabled === "true",
+    ));
   });
   dialog.showModal();
 }
@@ -532,8 +558,17 @@ async function deleteUser(user) {
 }
 
 async function deleteCredential(user, credentialId) {
-  if (!confirm(`删除 ${user.username} 的这个 Passkey？`)) return;
-  await mutate(`/api/management/users/${user.id}/credentials/${credentialId}`, { method: "DELETE" });
+  const ownAccount = user.id === state.currentUserId;
+  if (!confirm(`删除 ${user.username} 的 Passkey #${credentialId}？${ownAccount ? "操作后需重新登录。" : ""}`)) return;
+  await mutate(`/api/management/users/${user.id}/credentials/${credentialId}`, { method: "DELETE" }, { reauthenticate: ownAccount });
+}
+
+async function toggleCredential(user, credentialId, disabled) {
+  const ownAccount = user.id === state.currentUserId;
+  if (ownAccount && !confirm(`${disabled ? "停用" : "启用"} Passkey #${credentialId}？操作后需重新登录。`)) return;
+  await mutate(`/api/management/users/${user.id}/credentials/${credentialId}`, {
+    method: "PATCH", body: { disabled },
+  }, { reauthenticate: ownAccount });
 }
 
 function openNewPlatform() {
@@ -1194,10 +1229,18 @@ async function clearLogs(logType) {
   }
 }
 
-async function mutate(url, options) {
+async function mutate(url, options, { reauthenticate = false } = {}) {
   try {
     await requestJson(url, options);
     dialog.close();
+    if (reauthenticate) {
+      stopManagementChannel();
+      actionToken = "";
+      window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
+      const query = new URLSearchParams({ return_to: "/management#users" });
+      window.location.assign(`/auth/passkey?${query}`);
+      return;
+    }
     await loadOverview();
     setStatus("更改已保存", "success", true);
   } catch (error) {
@@ -1206,6 +1249,41 @@ async function mutate(url, options) {
 }
 
 async function requestJson(url, options = {}) {
+  if ((options.method || "GET") !== "GET" && url.startsWith("/api/management/") && !url.startsWith("/api/management/channel/")) {
+    return serializeManagementOperation(async () => {
+      try {
+        await startManagementChannel();
+      } catch (error) {
+        if (error.reauthRequired) redirectManagementReauth();
+        throw error;
+      }
+      return requestJsonDirect(url, options);
+    });
+  }
+  return requestJsonDirect(url, options);
+}
+
+function serializeManagementOperation(work) {
+  const epoch = managementChannelEpoch;
+  const result = managementOperations.then(() => {
+    if (epoch !== managementChannelEpoch) throw new Error("管理通道已更改，请重新验证后再试");
+    return work();
+  });
+  managementOperations = result.catch(() => {});
+  return result;
+}
+
+function redirectManagementReauth() {
+  stopManagementChannel();
+  actionToken = "";
+  window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const query = new URLSearchParams({ mode: "reauth", return_to: returnTo });
+  window.location.assign(`/auth/passkey?${query}`);
+  throw new Error("正在前往标准 Passkey 验证页面");
+}
+
+async function requestJsonDirect(url, options = {}) {
   const init = { method: options.method || "GET", headers: {} };
   if (init.method !== "GET") init.headers["X-CSRF-Token"] = csrfToken;
   if (
@@ -1233,33 +1311,29 @@ async function requestJson(url, options = {}) {
     window.sessionStorage.setItem(ACTION_TOKEN_STORAGE_KEY, actionToken);
   }
   if ((response.status === 428 || data.reauth_required) && !options.skipReauth) {
-    if (data.reauth_required) {
-      actionToken = "";
-      window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
-    }
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const query = new URLSearchParams({ mode: "reauth", return_to: returnTo });
-    window.location.assign(`/auth/passkey?${query}`);
-    throw new Error("正在前往标准 Passkey 验证页面");
+    redirectManagementReauth();
   }
   if (!response.ok) {
     const error = new Error(data.error || "请求失败");
     error.status = response.status;
+    error.reauthRequired = response.status === 428 || !!data.reauth_required;
     throw error;
   }
   return data;
 }
 
 async function startManagementChannel() {
+  if (managementChannel.active) return;
+  if (managementChannelStart) return managementChannelStart;
   if (
-    managementChannel.active ||
     !window.crypto ||
     !window.crypto.subtle ||
     typeof window.EventSource !== "function"
   ) {
-    return;
+    throw new Error("浏览器无法建立安全管理通道");
   }
-  try {
+  const epoch = managementChannelEpoch;
+  const starting = (async () => {
     const exportableKeyPair = await window.crypto.subtle.generateKey(
       {
         name: "ECDSA",
@@ -1285,19 +1359,28 @@ async function startManagementChannel() {
       body: { publicKeyJwk },
       skipReauth: true,
     });
+    if (epoch !== managementChannelEpoch) throw new Error("管理通道已更改，请重新验证后再试");
     managementChannel = {
       active: true,
       channelId: started.channel_id,
       keyPair: { privateKey },
       counter: 0,
       serverNonce: started.server_nonce,
+      nonceMode: started.nonce_mode || "sse",
       eventSource: null,
       ackTimer: null,
     };
     openManagementChannelEvents();
     scheduleManagementChannelAck(250);
-  } catch (_error) {
-    stopManagementChannel();
+  })();
+  managementChannelStart = starting;
+  try {
+    await starting;
+  } catch (error) {
+    if (epoch === managementChannelEpoch) stopManagementChannel();
+    throw error;
+  } finally {
+    if (managementChannelStart === starting) managementChannelStart = null;
   }
 }
 
@@ -1310,15 +1393,19 @@ function openManagementChannelEvents() {
   );
   managementChannel.eventSource = events;
   events.addEventListener("challenge", (event) => {
+    if (managementChannel.eventSource !== events) return;
     try {
       const payload = JSON.parse(event.data);
-      managementChannel.serverNonce = payload.server_nonce || managementChannel.serverNonce;
+      // Native Workers rotate only in signed ACK responses. An older SSE
+      // snapshot can arrive later and must never restore an obsolete nonce.
+      if (managementChannel.nonceMode !== "ack") managementChannel.serverNonce = payload.server_nonce || managementChannel.serverNonce;
       scheduleManagementChannelAck(250);
     } catch (_error) {
       stopManagementChannel();
     }
   });
   events.addEventListener("reauth", () => {
+    if (managementChannel.eventSource !== events) return;
     stopManagementChannel();
     actionToken = "";
     window.sessionStorage.removeItem(ACTION_TOKEN_STORAGE_KEY);
@@ -1327,6 +1414,7 @@ function openManagementChannelEvents() {
     window.location.assign(`/auth/passkey?${query}`);
   });
   events.onerror = () => {
+    if (managementChannel.eventSource !== events) return;
     scheduleManagementChannelAck(nextAckDelay());
   };
 }
@@ -1340,7 +1428,16 @@ function scheduleManagementChannelAck(delayMs) {
 }
 
 async function sendManagementChannelAck() {
+  try {
+    await serializeManagementOperation(() => sendManagementChannelAckDirect());
+  } catch (_error) {
+    // Channel cleanup invalidates queued operations; never replay them.
+  }
+}
+
+async function sendManagementChannelAckDirect() {
   if (!managementChannel.active || !managementChannel.serverNonce) return;
+  const channel = managementChannel;
   const startedAt = performance.now();
   const network = networkHints();
   try {
@@ -1363,6 +1460,7 @@ async function sendManagementChannelAck() {
       keepalive: true,
     });
     const data = await response.json();
+    if (managementChannel !== channel) return;
     if (!response.ok || !data.ok) {
       if (response.status === 428 || data.reauth_required) {
         stopManagementChannel();
@@ -1372,12 +1470,15 @@ async function sendManagementChannelAck() {
     managementChannel.serverNonce = data.server_nonce || managementChannel.serverNonce;
     scheduleManagementChannelAck(data.ack_after_ms || nextAckDelay());
   } catch (_error) {
-    scheduleManagementChannelAck(nextAckDelay());
+    // A lost native ACK response has an unknown nonce outcome. Do not replay
+    // it or keep sending proofs for the old nonce; the next action reconnects.
+    if (managementChannel === channel && channel.nonceMode === "ack") stopManagementChannel();
+    else if (managementChannel === channel) scheduleManagementChannelAck(nextAckDelay());
   }
 }
 
 async function managementChannelHeaders(purpose, method, url) {
-  if (!managementChannel.active || !managementChannel.serverNonce) return {};
+  if (!managementChannel.active || !managementChannel.serverNonce) throw new Error("安全管理通道尚未就绪");
   const path = new URL(url, window.location.origin).pathname;
   const network = networkHints();
   try {
@@ -1400,7 +1501,7 @@ async function managementChannelHeaders(purpose, method, url) {
       "X-Management-Channel-Save-Data": payload.saveData ? "1" : "0",
     };
   } catch (_error) {
-    return {};
+    throw new Error("管理请求签名失败，请重新验证后再试");
   }
 }
 
@@ -1413,6 +1514,7 @@ async function signedChannelPayload({
   saveData,
   rttMs,
 }) {
+  const channel = managementChannel;
   const counter = managementChannel.counter + 1;
   managementChannel.counter = counter;
   const clientNonce = base64Url(window.crypto.getRandomValues(new Uint8Array(18)));
@@ -1435,6 +1537,7 @@ async function signedChannelPayload({
     managementChannel.keyPair.privateKey,
     new TextEncoder().encode(message),
   );
+  if (managementChannel !== channel) throw new Error("管理通道已更改，请重新验证后再试");
   return {
     channelId: managementChannel.channelId,
     counter,
@@ -1465,6 +1568,7 @@ function networkHints() {
 }
 
 function stopManagementChannel() {
+  managementChannelEpoch += 1;
   window.clearTimeout(managementChannel.ackTimer);
   if (managementChannel.eventSource) managementChannel.eventSource.close();
   managementChannel = {
@@ -1473,6 +1577,7 @@ function stopManagementChannel() {
     keyPair: null,
     counter: 0,
     serverNonce: "",
+    nonceMode: "sse",
     eventSource: null,
     ackTimer: null,
   };

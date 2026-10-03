@@ -18,6 +18,22 @@ The recovery command stores the one-use URL in `worker/.local/`, with file mode 
 
 Public registration remains closed until changed in Management or with `npm run operator -- registration open`. General login may use a username or a discoverable Passkey. Management writes always need recent verified authentication even when general login permits presence-only credentials.
 
+## Multiple Passkeys
+
+After signing in, open **Passkeys** on the homepage or **我的 Passkeys** in Management, then choose **添加 Passkey**. The same compact dialog lists the account's existing credentials. **保存到 → 安全密钥（USB / NFC）** explicitly requests a cross-platform authenticator; automatic selection retains the configured browser behavior. Both choices retain server-side verified-user acceptance, allowed algorithms and discoverable-credential policy. A platform-only administrator policy still prevents external-key enrollment. An explicit attachment improves browser routing but cannot guarantee hardware-specific Safari behavior.
+
+Both choices and reauthentication request `userVerification: "required"`. The server uses `verifyRegistrationResponse({requireUserVerification: true})` and separately requires `registrationInfo.userVerified`; a response without signed UV is rejected without creating a credential. Both registration paths send the account username as `user.displayName` as well as `user.name`, while `user.id` remains the stable identity handle. Existing-credential exclusion remains intact, including disabled keys; no authenticator is allowed to bypass duplicate checks as a compatibility workaround.
+
+Enrollment preserves the identity, permissions and existing credentials; it also works while public registration is closed. A verified login older than five minutes triggers an inline Passkey reauthentication before enrollment, without leaving the page. Cancelling creates no credential. A synced Passkey is already usable on devices sharing its credential provider; enrollment excludes existing credentials, including disabled ones, to avoid registering the same credential again.
+
+Administrators manage each credential under **用户 → 管理**, not the global Passkey-settings page. Each row has its own enable/disable and delete actions. Changing a credential's status or deleting it revokes that user's existing sessions and OAuth access tokens; restoring a key does not restore old sessions. An administrator cannot disable or delete their own final active Passkey, including during concurrent requests. Deleting a credential from the service does not delete it from the user's device or password manager.
+
+Migration `0002_credential_status.sql` adds nullable `disabled_at` and a user/status index. Existing identities and credentials remain intact and enabled. Apply all numbered migrations with Wrangler before deploying this version; the test harness likewise applies the entire migration sequence.
+
+The new same-origin browser endpoints are `GET /api/account/passkeys`, `POST /api/account/passkeys/options` and `POST /api/account/passkeys/verify`. The GET response includes `ok`, `username`, `csrfToken`, and `passkeys` with `id`, timestamps, device/backup state and `disabledAt`; it excludes credential material. POST bodies require `csrfToken`; verification also requires the WebAuthn `credential`. Options optionally accepts `authenticator: "security-key"` (omit for automatic selection; other values return 400), returning `{ok, publicKey}`; verification returns `{ok}`. Both POSTs require a valid session and recent user verification (`403` with `reauthRequired: true` otherwise). They use a separate, expiring session-bound ceremony and an atomic D1 guard for one-time consumption. Existing external OAuth contracts are unchanged.
+
+The existing administrator credential path `/api/management/users/:userId/credentials/:credentialId` accepts `DELETE` and now `PATCH` with `{disabled: boolean}`. Both retain the signed Management channel, CSRF, fresh verification, rotating operation token and audit requirements. Ownership and credential status are checked again in the same D1 transaction as the mutation.
+
 ## Cloud initialization
 
 Prefer the connected Cloudflare MCP for account/resource discovery and scoped deployment. Wrangler remains the reproducible local build/migration tool and an authenticated deployment fallback. Only create/select this project's database; never delete or rebuild an account-wide resource.
@@ -38,6 +54,8 @@ D1 is authoritative for sessions, challenges, reservations, OAuth requests/codes
 
 Management retains CSRF, a five-minute verified reauthentication window, rotating operation tokens, P-256 signed proofs, monotonic counters and server nonces. SSE responses are short; EventSource reconnects at the server-provided retry interval, and every request rechecks authorization. There is no long-lived in-memory channel authority.
 
+Native channel responses advertise `nonce_mode: "ack"`. The server rotates its nonce atomically after a successful signed ACK, while SSE only reports current state and rechecks authorization. The browser serializes ACKs and Management writes, waits for channel initialization, and ignores late SSE nonce snapshots in this mode. This prevents network latency from invalidating an in-flight proof; replay and stale-counter rejection remain enforced by D1. The browser retains the legacy SSE nonce mode for the historical local Python UI.
+
 Registration is closed by default. Only a trusted Cloudflare operator can create recovery grants. The original full provider permissions (admin/login/demo plus per-client policy) remain; business/Team permissions belong to the consuming application, not this identity provider.
 
 ## UI and compatibility
@@ -54,7 +72,7 @@ The cookie and internal token encodings have changed. Test accounts, clients and
 | --- | --- |
 | Registration gate, lazy registration module, custom username | `auth.ts`; original `/api/ui/intent`, `/api/ui/register-client.js`, `/api/register/options` and `/verify`; real signed registration and browser tests |
 | Named/discoverable login, in-place homepage, reauthentication | `auth.ts`; original `/auth/passkey`, `/flow`, `/options`, `/verify`, `/api/me`, `/api/logout`; UV and session-rotation regressions |
-| Passkey inventory/removal, user permissions and revocation | `management.ts`; original Management APIs, last-admin protection, real D1 guard/rollback tests |
+| Multiple Passkeys, credential enable/disable/removal, user permissions and revocation | `auth.ts` and `management.ts`; self-service enrollment, user-specific credential controls, last-key/last-admin protection, real D1 guard/rollback and browser tests |
 | OAuth, PKCE, signup and existing identity reuse | `oauth.ts`; original authorize/complete/token/userinfo/discovery contract; concurrent code consumption and public HTTPS browser test |
 | Link challenge and server verification | `oauth.ts`; existing browser routes and `/api/server/session/verify`; new client-authenticated challenge create/consume HTTP APIs replace Python imports |
 | Trusted administrator initialization/recovery | Private operator-created D1 grant; original token-path UI/options/verify, strong UV, single-use transactional consumption |

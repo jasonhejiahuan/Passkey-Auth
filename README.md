@@ -2,7 +2,7 @@
 
 JASON Studio 的 Passkey 认证服务。当前服务器完全运行在 Cloudflare Workers 与 D1 上；沿用现有 Logo、HTML、CSS 和原生浏览器交互，不依赖 VPS 或外部认证后端。
 
-- 自定义用户名注册、用户名及无用户名登录、Passkey 管理。
+- 自定义用户名注册、用户名及无用户名登录、同一账号添加多个 Passkey，以及逐凭据停用和删除。
 - OAuth authorization code、S256 PKCE、自助注册接入、link challenge 和服务端会话验证。
 - Management 用户与平台权限、会话撤销、管理员恢复、审计、统计和 CSV。
 - CSRF、近期 Passkey 重新验证、轮换操作令牌、签名管理通道。

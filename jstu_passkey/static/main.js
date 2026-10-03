@@ -309,6 +309,7 @@ async function refreshSession(options = {}) {
       throw new Error(data.error || "无法检查登录状态");
     }
     authenticatedUser = data.authenticated ? data.user : null;
+    updateAccountPasskeysEntry();
     if (authenticatedUser) {
       if (options.refreshNonHome && !isHomePage()) {
         window.location.reload();
@@ -328,6 +329,7 @@ async function refreshSession(options = {}) {
     }
   } catch (error) {
     authenticatedUser = null;
+    updateAccountPasskeysEntry();
     setStatus(error.message || String(error), "error");
   } finally {
     sessionReady = true;
@@ -338,6 +340,11 @@ async function ensureSessionReady() {
   if (!sessionReady) {
     await refreshSession();
   }
+}
+
+function updateAccountPasskeysEntry() {
+  const entry = document.querySelector("#account-passkeys-button");
+  if (entry) entry.hidden = !authenticatedUser;
 }
 
 function isHomePage() {
@@ -370,6 +377,7 @@ async function logout() {
     await postJson(apiPath("logout"), {});
     window.sessionStorage.removeItem("passkey-action-token");
     authenticatedUser = null;
+    updateAccountPasskeysEntry();
     setStatus("已退出登录", "success");
   } catch (error) {
     setStatus(error.message || String(error), "error");

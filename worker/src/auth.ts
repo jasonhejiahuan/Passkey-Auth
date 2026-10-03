@@ -9,6 +9,7 @@ import {
   now,
   random,
   hash,
+  equal,
   b64,
   unb64,
   body,
@@ -31,13 +32,20 @@ export function page(
   vars: Record<string, unknown> = {},
   status = 200,
 ) {
-  return new Response(renderPage(name, vars), {
-    status,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
+  return new Response(
+    renderPage(name, {
+      account_passkeys_enabled: true,
+      account_signed_in: !!c.user,
+      ...vars,
+    }),
+    {
+      status,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
     },
-  });
+  );
 }
 export async function settings(c: Context) {
   const rows = await c.store.all<{
@@ -215,6 +223,7 @@ async function registerOptions(c: Context, data: any, recovery: string | null) {
     rpName: c.env.PASSKEY_RP_NAME || "JSTU Passkey",
     rpID: c.env.PASSKEY_RP_ID,
     userName: name,
+    userDisplayName: name,
     userID: unb64(handle),
     timeout: 60000,
     attestationType: (s.passkey_attestation || "none") as any,
@@ -403,6 +412,210 @@ async function registerVerify(c: Context, data: any, recovery: string | null) {
     action_token: action,
   });
 }
+
+function accountGuard(c: Context, u: UserRow, time: number) {
+  return {
+    sql: "EXISTS(SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.user_id=? AND s.user_version=? AND u.session_version=s.user_version AND u.user_handle=? AND s.csrf_token=? AND s.expires_at>? AND s.reauthenticated_at BETWEEN ? AND ? AND u.login=1 AND u.disabled_at IS NULL)",
+    bindings: [
+      c.session.token_hash,
+      u.id,
+      u.session_version,
+      u.user_handle,
+      c.session.csrf_token,
+      time,
+      time - 300,
+      time,
+    ],
+  };
+}
+
+async function accountAuthorization(c: Context, data: any) {
+  sameOrigin(c);
+  const u = c.user;
+  if (!u) throw new HTTPError(401, "请先登录");
+  if (
+    typeof data.csrfToken !== "string" ||
+    !(await equal(data.csrfToken, c.session.csrf_token))
+  )
+    throw new HTTPError(403, "请求验证失败，请刷新页面");
+  const time = now(),
+    verified = c.session.reauthenticated_at;
+  if (verified === null || verified < time - 300 || verified > time)
+    throw new HTTPError(403, "请先使用 Passkey 重新验证", {
+      reauthRequired: true,
+    });
+  return u;
+}
+
+async function additionalPasskeyOptions(c: Context, data: any) {
+  const u = await accountAuthorization(c, data),
+    s = await settings(c);
+  if (
+    data.authenticator !== undefined &&
+    data.authenticator !== "security-key"
+  )
+    throw new HTTPError(400, "无效的 Passkey 设备类型");
+  const securityKey = data.authenticator === "security-key",
+    attachment = s.passkey_authenticator_attachment || "any";
+  if (securityKey && attachment !== "any" && attachment !== "cross-platform")
+    throw new HTTPError(403, "当前 Passkey 策略不允许安全密钥");
+  const existing = await c.store.all<{
+    credential_id: string;
+    transports: string;
+  }>(
+    "SELECT credential_id,transports FROM credentials WHERE user_id=? ORDER BY id",
+    u.id,
+  );
+  const algorithms = JSON.parse(s.passkey_algorithms || "[-7,-8,-257]");
+  const options = await generateRegistrationOptions({
+    rpName: c.env.PASSKEY_RP_NAME || "JSTU Passkey",
+    rpID: c.env.PASSKEY_RP_ID,
+    userName: u.username,
+    userDisplayName: u.username,
+    userID: unb64(u.user_handle),
+    timeout: 60000,
+    attestationType: (s.passkey_attestation || "none") as any,
+    supportedAlgorithmIDs: algorithms,
+    excludeCredentials: existing.map((row) => ({
+      id: row.credential_id,
+      transports: JSON.parse(row.transports),
+    })),
+    authenticatorSelection: {
+      residentKey: (s.passkey_resident_key || "required") as any,
+      userVerification: "required",
+      ...(securityKey
+        ? { authenticatorAttachment: "cross-platform" as const }
+        : attachment !== "any"
+        ? { authenticatorAttachment: attachment as any }
+        : {}),
+    },
+  });
+  options.hints = securityKey
+    ? ["security-key"]
+    : JSON.parse(
+        s.passkey_hints || '["client-device","security-key","hybrid"]',
+      );
+  const time = now(),
+    guard = accountGuard(c, u, time);
+  try {
+    await c.store.guardBatch(guard.sql, guard.bindings, [
+      c.env.DB.prepare(
+        "DELETE FROM ceremonies WHERE session_hash=? AND purpose='additional_passkey'",
+      ).bind(c.session.token_hash),
+      c.env.DB.prepare(
+        "INSERT INTO ceremonies(id,session_hash,purpose,challenge,user_id,user_handle,context_json,expires_at) VALUES (?,?,'additional_passkey',?,?,?,?,?)",
+      ).bind(
+        random(),
+        c.session.token_hash,
+        options.challenge,
+        u.id,
+        u.user_handle,
+        JSON.stringify({ userVersion: u.session_version, algorithms }),
+        time + 300,
+      ),
+    ]);
+  } catch (error) {
+    if ((error as Error).name === "StoreConflict")
+      throw new HTTPError(403, "验证已过期或权限已变更，请重新验证", {
+        reauthRequired: true,
+      });
+    throw error;
+  }
+  return json({ ok: true, publicKey: options });
+}
+
+async function additionalPasskeyVerify(c: Context, data: any) {
+  const u = await accountAuthorization(c, data);
+  const r = await c.store.one<{
+    id: string;
+    challenge: string;
+    user_id: number;
+    user_handle: string;
+    context_json: string;
+  }>(
+    "SELECT id,challenge,user_id,user_handle,context_json FROM ceremonies WHERE session_hash=? AND purpose='additional_passkey' AND consumed_at IS NULL AND expires_at>?",
+    c.session.token_hash,
+    now(),
+  );
+  if (!r) throw new HTTPError(400, "Passkey 添加会话已过期，请重新开始");
+  const context = JSON.parse(r.context_json);
+  if (
+    r.user_id !== u.id ||
+    r.user_handle !== u.user_handle ||
+    context.userVersion !== u.session_version
+  )
+    throw new HTTPError(403, "验证已过期或权限已变更，请重新验证", {
+      reauthRequired: true,
+    });
+  let result;
+  try {
+    result = await verifyRegistrationResponse({
+      response: data.credential,
+      expectedChallenge: r.challenge,
+      expectedOrigin: c.env.PASSKEY_ORIGIN,
+      expectedRPID: c.env.PASSKEY_RP_ID,
+      requireUserVerification: true,
+      supportedAlgorithmIDs: context.algorithms,
+    });
+  } catch {
+    throw new HTTPError(400, "Passkey 添加验证失败");
+  }
+  if (!result.verified || !result.registrationInfo?.userVerified)
+    throw new HTTPError(400, "Passkey 添加验证失败");
+  const info = result.registrationInfo,
+    cred = info.credential,
+    time = now(),
+    guard = accountGuard(c, u, time);
+  try {
+    await c.store.guardBatch(
+      `${guard.sql} AND EXISTS(SELECT 1 FROM ceremonies WHERE id=? AND session_hash=? AND purpose='additional_passkey' AND user_id=? AND user_handle=? AND context_json=? AND challenge=? AND consumed_at IS NULL AND expires_at>?)`,
+      [
+        ...guard.bindings,
+        r.id,
+        c.session.token_hash,
+        u.id,
+        u.user_handle,
+        r.context_json,
+        r.challenge,
+        time,
+      ],
+      [
+        c.env.DB.prepare("UPDATE ceremonies SET consumed_at=? WHERE id=?").bind(
+          time,
+          r.id,
+        ),
+        c.env.DB.prepare(
+          "INSERT INTO credentials(user_id,credential_id,public_key,sign_count,transports,aaguid,credential_type,device_type,backed_up,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        ).bind(
+          u.id,
+          cred.id,
+          b64(cred.publicKey),
+          cred.counter,
+          JSON.stringify(cred.transports || []),
+          info.aaguid,
+          "public-key",
+          info.credentialDeviceType,
+          info.credentialBackedUp ? 1 : 0,
+          time,
+          time,
+        ),
+        c.env.DB.prepare(
+          "INSERT INTO audit_logs(actor_user_id,actor_username,action,target_type,target_id,created_at) VALUES (?,?,'credential.add','credential',(SELECT CAST(id AS TEXT) FROM credentials WHERE credential_id=?),?)",
+        ).bind(u.id, u.username, cred.id, time),
+      ],
+    );
+  } catch (error) {
+    if (String(error).includes("UNIQUE"))
+      throw new HTTPError(409, "这个 Passkey 已注册");
+    if ((error as Error).name === "StoreConflict")
+      throw new HTTPError(403, "验证已过期或权限已变更，请重新验证", {
+        reauthRequired: true,
+      });
+    throw error;
+  }
+  return json({ ok: true });
+}
+
 async function loginOptions(c: Context, data: any) {
   checkFlow(c, data);
   const mode = data.mode || "login";
@@ -433,7 +646,7 @@ async function loginOptions(c: Context, data: any) {
     throw new HTTPError(403, "此账户当前不允许登录");
   const creds = expected
     ? await c.store.all<any>(
-        "SELECT credential_id,transports FROM credentials WHERE user_id=?",
+        "SELECT credential_id,transports FROM credentials WHERE user_id=? AND disabled_at IS NULL",
         expected.id,
       )
     : null;
@@ -497,6 +710,8 @@ async function loginVerify(c: Context, data: any) {
     response.id || response.rawId || "",
   );
   if (!cred) throw new HTTPError(404, "没有找到对应的 Passkey");
+  if (cred.disabled_at !== null)
+    throw new HTTPError(403, "这个 Passkey 已停用");
   const u = await c.store.one<UserRow>(
     "SELECT * FROM users WHERE id=?",
     cred.user_id,
@@ -577,7 +792,7 @@ async function loginVerify(c: Context, data: any) {
     c,
     u,
     action,
-    "EXISTS(SELECT 1 FROM ceremonies WHERE id=? AND session_hash=? AND consumed_at IS NULL AND expires_at>?) AND EXISTS(SELECT 1 FROM credentials WHERE id=? AND sign_count=?)",
+    "EXISTS(SELECT 1 FROM ceremonies WHERE id=? AND session_hash=? AND consumed_at IS NULL AND expires_at>?) AND EXISTS(SELECT 1 FROM credentials WHERE id=? AND sign_count=? AND disabled_at IS NULL)",
     [r.id, c.session.token_hash, time, cred.id, cred.sign_count],
     stmts,
     ctx.mode === "reauth",
@@ -598,6 +813,45 @@ export async function auth(c: Context): Promise<Response | null> {
         ? { authenticated: true, user: { username: c.user.username } }
         : { authenticated: false },
     );
+  if (method === "GET" && path === "/api/account/passkeys") {
+    if (!c.user) throw new HTTPError(401, "请先登录");
+    const rows = await c.store.all<{
+      id: number;
+      created_at: number;
+      updated_at: number;
+      device_type: string | null;
+      backed_up: number;
+      disabled_at: number | null;
+    }>(
+      "SELECT id,created_at,updated_at,device_type,backed_up,disabled_at FROM credentials WHERE user_id=? ORDER BY created_at,id",
+      c.user.id,
+    );
+    return json({
+      ok: true,
+      username: c.user.username,
+      csrfToken: c.session.csrf_token,
+      passkeys: rows.map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        deviceType: row.device_type,
+        backedUp: !!row.backed_up,
+        disabledAt: row.disabled_at,
+      })),
+    });
+  }
+  if (
+    method === "POST" &&
+    ["/api/account/passkeys/options", "/api/account/passkeys/verify"].includes(
+      path,
+    )
+  ) {
+    sameOrigin(c);
+    const data = await body(c);
+    return path.endsWith("/options")
+      ? additionalPasskeyOptions(c, data)
+      : additionalPasskeyVerify(c, data);
+  }
   if (method === "GET" && path === "/auth/passkey") {
     const mode =
       c.url.searchParams.get("mode") === "reauth" && c.user

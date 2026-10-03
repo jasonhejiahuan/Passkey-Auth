@@ -7,7 +7,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readMigrations } from "./migrations";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
@@ -67,7 +67,7 @@ class Authenticator {
     );
   }
 
-  registration(options: any, credentialOrigin = origin) {
+  registration(options: any, credentialOrigin = origin, userVerified = true) {
     this.userHandle = options.user.id;
     const client = Buffer.from(
       JSON.stringify({
@@ -82,7 +82,7 @@ class Authenticator {
     length.writeUInt16BE(credential.length);
     const authData = Buffer.concat([
       digest(options.rp.id),
-      Buffer.from([0x45]),
+      Buffer.from([userVerified ? 0x45 : 0x41]),
       Buffer.alloc(4),
       Buffer.alloc(16),
       length,
@@ -212,6 +212,15 @@ async function signup(name = "Alice") {
   });
   return { browser, authenticator, options };
 }
+async function additionalOptions(browser: Browser) {
+  const { csrfToken } = await browser.json("/api/account/passkeys");
+  const { publicKey } = await browser.json(
+    "/api/account/passkeys/options",
+    "POST",
+    { csrfToken },
+  );
+  return { csrfToken, publicKey };
+}
 async function loginOptions(browser: Browser, name = "Alice") {
   const flow = await browser.json("/auth/passkey/flow", "POST", {});
   const options = (
@@ -338,10 +347,7 @@ beforeAll(async () => {
   address = String(await runtime.ready).replace(/\/$/, "");
   const response = await fetch(`${address}/__test/migration`, {
     method: "POST",
-    body: await readFile(
-      new URL("../migrations/0001_native_auth.sql", import.meta.url),
-      "utf8",
-    ),
+    body: await readMigrations(),
   });
   expect(response.ok, await response.text()).toBe(true);
 }, 30_000);
@@ -350,6 +356,8 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   for (const table of [
+    "audit_logs",
+    "login_history",
     "sessions",
     "users",
     "oauth_clients",
@@ -376,6 +384,576 @@ beforeEach(async () => {
 });
 
 describe("native authentication routes with real WebAuthn signatures", () => {
+  it("adds a second passkey to the same identity when signup is closed and both keys support named and discoverable login", async () => {
+    const { browser, authenticator } = await signup();
+    await signup("Other User");
+    const original = (
+      await sql("SELECT * FROM users WHERE username_key='alice'")
+    ).results[0];
+    const sessionHash = hash(browser.cookie.slice("session=".length));
+    const originalSession = (
+      await sql("SELECT * FROM sessions WHERE token_hash=?", [sessionHash])
+    ).results[0];
+    await sql(
+      "UPDATE app_settings SET setting_value='closed' WHERE setting_key='registration_mode'",
+    );
+    const list = await browser.json("/api/account/passkeys");
+    expect(list.passkeys).toHaveLength(1);
+    expect(Object.keys(list.passkeys[0]).sort()).toEqual([
+      "backedUp",
+      "createdAt",
+      "deviceType",
+      "disabledAt",
+      "id",
+      "updatedAt",
+    ]);
+    const second = new Authenticator(),
+      { csrfToken, publicKey } = await additionalOptions(browser);
+    expect(publicKey.user).toEqual({
+      id: authenticator.userHandle, name: "Alice", displayName: "Alice",
+    });
+    expect(publicKey.authenticatorSelection.userVerification).toBe("required");
+    expect(publicKey.excludeCredentials.map((row: any) => row.id)).toEqual([
+      authenticator.id,
+    ]);
+    const response = await browser.request(
+      "/api/account/passkeys/verify",
+      "POST",
+      {
+        csrfToken,
+        credential: second.registration(publicKey),
+        userId: original.id + 1,
+        username: "Other User",
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.getSetCookie()).toHaveLength(0);
+    expect(
+      (await sql("SELECT * FROM users WHERE id=?", [original.id])).results[0],
+    ).toEqual(original);
+    expect(
+      (await sql("SELECT * FROM sessions WHERE token_hash=?", [sessionHash]))
+        .results[0],
+    ).toEqual(originalSession);
+    expect(
+      (
+        await sql("SELECT user_id FROM credentials WHERE user_id=?", [
+          original.id,
+        ])
+      ).results,
+    ).toEqual([{ user_id: original.id }, { user_id: original.id }]);
+    expect(
+      (
+        await sql(
+          "SELECT actor_user_id,target_type FROM audit_logs WHERE action='credential.add' AND actor_user_id=?",
+          [original.id],
+        )
+      ).results,
+    ).toEqual([{ actor_user_id: original.id, target_type: "credential" }]);
+    expect((await browser.json("/api/account/passkeys")).passkeys).toHaveLength(
+      2,
+    );
+    for (const key of [authenticator, second]) {
+      for (const name of ["Alice", ""]) {
+        const fresh = new Browser(),
+          { options, flow } = await loginOptions(fresh, name);
+        await fresh.json("/auth/passkey/verify", "POST", {
+          credential: key.assertion(options),
+          authFlowToken: flow,
+        });
+        expect(await fresh.json("/api/me")).toMatchObject({
+          authenticated: true,
+          user: { username: "Alice" },
+        });
+      }
+    }
+  });
+
+  it("requires a signed-in session, same origin, session CSRF, and recent verified authentication to add passkeys", async () => {
+    const guest = new Browser();
+    expect((await guest.request("/api/account/passkeys")).status).toBe(401);
+    for (const path of ["options", "verify"])
+      expect(
+        (await guest.request(`/api/account/passkeys/${path}`, "POST", {}))
+          .status,
+      ).toBe(401);
+    const { browser, authenticator } = await signup();
+    const { csrfToken } = await browser.json("/api/account/passkeys");
+    for (const path of ["options", "verify"]) {
+      expect(
+        (
+          await browser.request(`/api/account/passkeys/${path}`, "POST", {
+            csrfToken: "wrong",
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await browser.request(
+            `/api/account/passkeys/${path}`,
+            "POST",
+            { csrfToken },
+            { origin: "https://evil.test" },
+          )
+        ).status,
+      ).toBe(403);
+    }
+    const tokenHash = hash(browser.cookie.slice("session=".length));
+    await sql(
+      "UPDATE sessions SET reauthenticated_at=unixepoch()-301 WHERE token_hash=?",
+      [tokenHash],
+    );
+    for (const path of ["options", "verify"]) {
+      const response = await browser.request(
+        `/api/account/passkeys/${path}`,
+        "POST",
+        { csrfToken },
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ reauthRequired: true });
+    }
+    const presenceOnly = new Browser(),
+      { options, flow } = await loginOptions(presenceOnly);
+    await presenceOnly.json("/auth/passkey/verify", "POST", {
+      credential: authenticator.assertion(options, { userVerified: false }),
+      authFlowToken: flow,
+    });
+    const presenceCsrf = (await presenceOnly.json("/api/account/passkeys"))
+      .csrfToken;
+    const denied = await presenceOnly.request(
+      "/api/account/passkeys/options",
+      "POST",
+      { csrfToken: presenceCsrf },
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reauthRequired: true });
+    expect(
+      (
+        await sql(
+          "SELECT id FROM ceremonies WHERE purpose='additional_passkey'",
+        )
+      ).results,
+    ).toHaveLength(0);
+  });
+
+  it("targets an explicitly chosen USB security key without changing the default ceremony or weakening UV", async () => {
+    const { browser, authenticator } = await signup();
+    const automatic = await additionalOptions(browser);
+    expect(automatic.publicKey.authenticatorSelection).toEqual({
+      residentKey: "required",
+      requireResidentKey: true,
+      userVerification: "required",
+    });
+    expect(automatic.publicKey.hints).toEqual([
+      "client-device", "security-key", "hybrid",
+    ]);
+    expect(automatic.publicKey.pubKeyCredParams.map((row: any) => row.alg)).toEqual([
+      -7, -8, -257,
+    ]);
+    await sql(
+      "INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES ('passkey_algorithms','[-7]',unixepoch()),('passkey_hints','[\"hybrid\"]',unixepoch())",
+    );
+    let publicKey: any;
+    for (const attachment of ["any", "cross-platform"]) {
+      await sql(
+        "INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES ('passkey_authenticator_attachment',?,unixepoch()) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value",
+        [attachment],
+      );
+      ({ publicKey } = await browser.json(
+        "/api/account/passkeys/options", "POST",
+        { csrfToken: automatic.csrfToken, authenticator: "security-key" },
+      ));
+      expect(publicKey.authenticatorSelection).toEqual({
+        authenticatorAttachment: "cross-platform",
+        residentKey: "required",
+        requireResidentKey: true,
+        userVerification: "required",
+      });
+      expect(publicKey.hints).toEqual(["security-key"]);
+      expect(publicKey.pubKeyCredParams).toEqual([{ alg: -7, type: "public-key" }]);
+      expect(publicKey.attestation).toBe("none");
+      expect(publicKey.user).toEqual({
+        id: authenticator.userHandle, name: "Alice", displayName: "Alice",
+      });
+      expect(publicKey.excludeCredentials.map((row: any) => row.id)).toEqual([
+        authenticator.id,
+      ]);
+    }
+    const usbKey = new Authenticator();
+    const usbRegistration = (verified: boolean) => {
+      const credential = usbKey.registration(publicKey, origin, verified);
+      credential.authenticatorAttachment = "cross-platform";
+      credential.response.transports = ["usb"];
+      return credential;
+    };
+    const rejected = await browser.request(
+      "/api/account/passkeys/verify", "POST",
+      { csrfToken: automatic.csrfToken, credential: usbRegistration(false) },
+    );
+    expect(rejected.status).toBe(400);
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(1);
+    expect((await sql(
+      "SELECT id FROM audit_logs WHERE action='credential.add'",
+    )).results).toHaveLength(0);
+    expect((await sql(
+      "SELECT consumed_at FROM ceremonies WHERE purpose='additional_passkey' AND challenge=?",
+      [publicKey.challenge],
+    )).results).toEqual([{ consumed_at: null }]);
+    await browser.json("/api/account/passkeys/verify", "POST", {
+      csrfToken: automatic.csrfToken, credential: usbRegistration(true),
+    });
+    expect((await sql(
+      "SELECT transports,device_type,disabled_at FROM credentials WHERE credential_id=?",
+      [usbKey.id],
+    )).results).toEqual([{
+      transports: '["usb"]', device_type: "singleDevice", disabled_at: null,
+    }]);
+    const fresh = new Browser(), { options, flow } = await loginOptions(fresh);
+    expect(options.allowCredentials.find((row: any) => row.id === usbKey.id)).toMatchObject({
+      transports: ["usb"],
+    });
+    await fresh.json("/auth/passkey/verify", "POST", {
+      authFlowToken: flow, credential: usbKey.assertion(options),
+    });
+    expect(await fresh.json("/api/me")).toMatchObject({ authenticated: true });
+    const nextAutomatic = await additionalOptions(browser);
+    expect(nextAutomatic.publicKey.hints).toEqual(["hybrid"]);
+    expect(nextAutomatic.publicKey.authenticatorSelection.userVerification).toBe("required");
+    expect(nextAutomatic.publicKey.authenticatorSelection.authenticatorAttachment)
+      .toBe("cross-platform");
+    const { authFlowToken } = await browser.json("/auth/passkey/flow", "POST", {});
+    const reauth = await browser.json("/auth/passkey/options", "POST", {
+      mode: "reauth", authFlowToken,
+    });
+    expect(reauth.publicKey.userVerification).toBe("required");
+  });
+
+  it("rejects invalid device choices and respects platform-only policy without replacing an existing ceremony", async () => {
+    const { browser } = await signup();
+    const { csrfToken, publicKey } = await additionalOptions(browser);
+    for (const authenticator of [null, "", "auto", "platform", {}, true]) {
+      const response = await browser.request(
+        "/api/account/passkeys/options", "POST", { csrfToken, authenticator },
+      );
+      expect(response.status).toBe(400);
+    }
+    await sql(
+      "INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES ('passkey_authenticator_attachment','platform',unixepoch())",
+    );
+    const denied = await browser.request(
+      "/api/account/passkeys/options", "POST",
+      { csrfToken, authenticator: "security-key" },
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ error: "当前 Passkey 策略不允许安全密钥" });
+    expect((await sql(
+      "SELECT challenge,consumed_at FROM ceremonies WHERE purpose='additional_passkey'",
+    )).results).toEqual([{ challenge: publicKey.challenge, consumed_at: null }]);
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(1);
+    const automatic = await additionalOptions(browser);
+    expect(automatic.publicKey.authenticatorSelection.authenticatorAttachment).toBe("platform");
+    expect(automatic.publicKey.hints).toEqual(["client-device", "security-key", "hybrid"]);
+  });
+
+  it("binds additional-passkey ceremonies to the original session, user and strong UV response", async () => {
+    const { browser, authenticator } = await signup();
+    const secondSession = new Browser(),
+      { options, flow } = await loginOptions(secondSession);
+    await secondSession.json("/auth/passkey/verify", "POST", {
+      credential: authenticator.assertion(options),
+      authFlowToken: flow,
+    });
+    const other = await signup("Bob");
+    const { csrfToken, publicKey } = await additionalOptions(browser);
+    const key = new Authenticator(),
+      credential = key.registration(publicKey);
+    for (const foreign of [secondSession, other.browser]) {
+      const foreignCsrf = (await foreign.json("/api/account/passkeys"))
+        .csrfToken;
+      expect(
+        (
+          await foreign.request("/api/account/passkeys/verify", "POST", {
+            csrfToken: foreignCsrf,
+            credential,
+          })
+        ).status,
+      ).toBe(400);
+    }
+    for (const invalid of [
+      key.registration(publicKey, origin, false),
+      key.registration(publicKey, "https://evil.test"),
+      key.registration({
+        ...publicKey,
+        challenge: randomBytes(32).toString("base64url"),
+      }),
+    ]) {
+      expect(
+        (
+          await browser.request("/api/account/passkeys/verify", "POST", {
+            csrfToken,
+            credential: invalid,
+          })
+        ).status,
+      ).toBe(400);
+    }
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(2);
+    expect(
+      (
+        await browser.request("/api/account/passkeys/verify", "POST", {
+          csrfToken,
+          credential,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await browser.request("/api/account/passkeys/verify", "POST", {
+          csrfToken,
+          credential,
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it("rejects duplicate and disabled existing credentials without consuming a usable add ceremony", async () => {
+    const { browser, authenticator } = await signup();
+    await sql(
+      "UPDATE credentials SET disabled_at=unixepoch() WHERE credential_id=?",
+      [authenticator.id],
+    );
+    const { csrfToken, publicKey } = await additionalOptions(browser);
+    expect(publicKey.excludeCredentials.map((row: any) => row.id)).toEqual([
+      authenticator.id,
+    ]);
+    const listed = await browser.json("/api/account/passkeys");
+    expect(listed.passkeys[0].disabledAt).toEqual(expect.any(Number));
+    const duplicate = await browser.request(
+      "/api/account/passkeys/verify",
+      "POST",
+      { csrfToken, credential: authenticator.registration(publicKey) },
+    );
+    expect(duplicate.status).toBe(409);
+    expect(
+      (
+        await sql(
+          "SELECT consumed_at FROM ceremonies WHERE purpose='additional_passkey'",
+        )
+      ).results[0].consumed_at,
+    ).toBeNull();
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(1);
+    expect(
+      (await sql("SELECT id FROM audit_logs WHERE action='credential.add'"))
+        .results,
+    ).toHaveLength(0);
+  });
+
+  it("inserts and audits only one additional passkey when verification races", async () => {
+    const { browser } = await signup();
+    const { csrfToken, publicKey } = await additionalOptions(browser),
+      key = new Authenticator();
+    const credential = key.registration(publicKey),
+      cookie = browser.cookie;
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        fetch(`${address}/api/account/passkeys/verify`, {
+          method: "POST",
+          headers: { origin, cookie, "content-type": "application/json" },
+          body: JSON.stringify({ csrfToken, credential }),
+        }),
+      ),
+    );
+    expect(
+      responses.filter((response) => response.status === 200),
+    ).toHaveLength(1);
+    expect(
+      responses.filter(
+        (response) => response.status >= 400 && response.status < 500,
+      ),
+    ).toHaveLength(7);
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(2);
+    expect(
+      (await sql("SELECT id FROM audit_logs WHERE action='credential.add'"))
+        .results,
+    ).toHaveLength(1);
+    expect((await sql("SELECT * FROM operation_guards")).results).toHaveLength(
+      0,
+    );
+  });
+
+  it("atomically rejects adding a key after user/session revocation or freshness expiry during verification", async () => {
+    for (const [index, mutation] of [
+      "UPDATE users SET session_version=session_version+1",
+      "UPDATE users SET login=0",
+      "UPDATE users SET disabled_at=unixepoch()",
+      "UPDATE sessions SET reauthenticated_at=unixepoch()-301",
+      "UPDATE sessions SET expires_at=unixepoch()-1",
+      "DELETE FROM sessions",
+    ].entries()) {
+      const { browser } = await signup(`Revoked${index}`),
+        { csrfToken, publicKey } = await additionalOptions(browser),
+        key = new Authenticator();
+      const beforeCount = (await sql("SELECT id FROM credentials")).results
+        .length;
+      const response = await browser.request(
+        "/api/account/passkeys/verify",
+        "POST",
+        { csrfToken, credential: key.registration(publicKey) },
+        { "x-test-before-batch-sql": mutation },
+      );
+      expect(response.status, mutation).toBe(403);
+      expect(await response.json()).toMatchObject({ reauthRequired: true });
+      expect((await sql("SELECT id FROM credentials")).results).toHaveLength(
+        beforeCount,
+      );
+      expect(
+        (await sql("SELECT id FROM audit_logs WHERE action='credential.add'"))
+          .results,
+      ).toHaveLength(0);
+    }
+  });
+
+  it("invalidates an outstanding add flow when its authenticating credential is disabled or removed", async () => {
+    for (const remove of [false, true]) {
+      const { browser, authenticator } = await signup(
+        remove ? "Removed" : "Disabled",
+      );
+      const { csrfToken, publicKey } = await additionalOptions(browser),
+        key = new Authenticator();
+      await sql(
+        remove
+          ? "DELETE FROM credentials WHERE credential_id=?"
+          : "UPDATE credentials SET disabled_at=unixepoch() WHERE credential_id=?",
+        [authenticator.id],
+      );
+      await sql(
+        "UPDATE users SET session_version=session_version+1 WHERE user_handle=?",
+        [authenticator.userHandle],
+      );
+      expect(
+        (
+          await browser.request("/api/account/passkeys/verify", "POST", {
+            csrfToken,
+            credential: key.registration(publicKey),
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await sql("SELECT id FROM credentials WHERE credential_id=?", [
+            key.id,
+          ])
+        ).results,
+      ).toHaveLength(0);
+    }
+  });
+
+  it("rechecks authorization before issuing an add ceremony and refuses an expired creation challenge", async () => {
+    const { browser } = await signup();
+    const { csrfToken } = await browser.json("/api/account/passkeys");
+    const denied = await browser.request(
+      "/api/account/passkeys/options",
+      "POST",
+      { csrfToken },
+      {
+        "x-test-before-batch-sql":
+          "UPDATE sessions SET reauthenticated_at=unixepoch()-301",
+      },
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reauthRequired: true });
+    expect(
+      (
+        await sql(
+          "SELECT id FROM ceremonies WHERE purpose='additional_passkey'",
+        )
+      ).results,
+    ).toHaveLength(0);
+    await sql("UPDATE sessions SET reauthenticated_at=unixepoch()");
+    const { publicKey } = await additionalOptions(browser),
+      key = new Authenticator();
+    await sql(
+      "UPDATE ceremonies SET expires_at=unixepoch()-1 WHERE purpose='additional_passkey'",
+    );
+    expect(
+      (
+        await browser.request("/api/account/passkeys/verify", "POST", {
+          csrfToken,
+          credential: key.registration(publicKey),
+        })
+      ).status,
+    ).toBe(400);
+    expect((await sql("SELECT id FROM credentials")).results).toHaveLength(1);
+  });
+
+  it("omits disabled keys from named login and rejects them in discoverable login and atomic races", async () => {
+    const { browser, authenticator } = await signup();
+    const second = new Authenticator(),
+      { csrfToken, publicKey } = await additionalOptions(browser);
+    await browser.json("/api/account/passkeys/verify", "POST", {
+      csrfToken,
+      credential: second.registration(publicKey),
+    });
+    await sql(
+      "UPDATE credentials SET disabled_at=unixepoch() WHERE credential_id=?",
+      [authenticator.id],
+    );
+    const named = new Browser(),
+      allowed = await loginOptions(named);
+    expect(allowed.options.allowCredentials.map((row: any) => row.id)).toEqual([
+      second.id,
+    ]);
+    expect(
+      (
+        await named.request("/auth/passkey/verify", "POST", {
+          credential: authenticator.assertion(allowed.options),
+          authFlowToken: allowed.flow,
+        })
+      ).status,
+    ).toBe(403);
+    const discoverable = new Browser(),
+      discovered = await loginOptions(discoverable, "");
+    expect(
+      (
+        await discoverable.request("/auth/passkey/verify", "POST", {
+          credential: authenticator.assertion(discovered.options),
+          authFlowToken: discovered.flow,
+        })
+      ).status,
+    ).toBe(403);
+    const race = new Browser(),
+      pending = await loginOptions(race);
+    const response = await race.request(
+      "/auth/passkey/verify",
+      "POST",
+      {
+        credential: second.assertion(pending.options),
+        authFlowToken: pending.flow,
+      },
+      {
+        "x-test-before-batch-sql": `UPDATE credentials SET disabled_at=unixepoch() WHERE credential_id='${second.id}'`,
+      },
+    );
+    expect(response.status).toBe(409);
+    expect((await race.json("/api/me")).authenticated).toBe(false);
+    expect(
+      (
+        await sql("SELECT sign_count FROM credentials WHERE credential_id=?", [
+          second.id,
+        ])
+      ).results[0].sign_count,
+    ).toBe(0);
+    const none = new Browser(),
+      { authFlowToken } = await none.json("/auth/passkey/flow", "POST", {});
+    expect(
+      (
+        await none.request("/auth/passkey/options", "POST", {
+          username: "Alice",
+          authFlowToken,
+        })
+      ).status,
+    ).toBe(404);
+  });
+
   it("rejects username controls before normalization while accepting Unicode letters and ordinary spaces", async () => {
     const browser = new Browser();
     await browser.json("/api/ui/intent", "POST", { intent: "register" });
@@ -412,7 +990,11 @@ describe("native authentication routes with real WebAuthn signatures", () => {
     const { browser: signedIn, options } = await signup(
       "  张伟 José Ｊａｓｏｎ １２  ",
     );
-    expect(options.user.name).toBe("张伟 José Jason 12");
+    expect(options.user).toMatchObject({
+      name: "张伟 José Jason 12", displayName: "张伟 José Jason 12",
+    });
+    const additional = await additionalOptions(signedIn);
+    expect(additional.publicKey.user).toEqual(options.user);
     expect(await signedIn.json("/api/me")).toMatchObject({
       authenticated: true,
       user: { username: "张伟 José Jason 12" },

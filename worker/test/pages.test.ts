@@ -24,6 +24,30 @@ describe("original Python page parity", () => {
 });
 
 describe("page boundaries", () => {
+  it("keeps self-service Passkeys in the native account entry and user controls separate from global settings", () => {
+    const home = renderPage("index.html", {
+      home_auth_enabled: true,
+      account_passkeys_enabled: true,
+      account_signed_in: true,
+    });
+    expect(home).toContain('id="account-passkeys-dialog"');
+    expect(home).toContain('id="account-passkeys-add"');
+    expect(home).toContain('src="/static/account_passkeys.js"');
+    expect(home).not.toMatch(/id="account-passkeys-button"[^>]* hidden/);
+    const anonymous = renderPage("index.html", {
+      home_auth_enabled: true,
+      account_passkeys_enabled: true,
+      account_signed_in: false,
+    });
+    expect(anonymous).toMatch(/id="account-passkeys-button"[^>]* hidden/);
+    const management = renderPage("management.html", {
+      csrf_token: "test-csrf",
+      account_passkeys_enabled: true,
+    });
+    expect(management).toContain('id="account-passkeys-button"');
+    expect(management).toContain("我的 Passkeys");
+  });
+
   it("escapes user text and authorization dataset values", () => {
     const hostile = '<img src=x onerror="alert(1)"> & \' quote';
     const html = renderPage("oauth_authorize.html", {

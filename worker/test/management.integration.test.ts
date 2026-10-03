@@ -5,7 +5,7 @@ import {
   randomBytes,
   sign,
 } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readMigrations } from "./migrations";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
@@ -102,6 +102,70 @@ async function collect(token: string) {
   });
 }
 
+async function credential(
+  id: number,
+  userId: number,
+  disabledAt: number | null = null,
+) {
+  await sql(
+    "INSERT INTO credentials(id,user_id,credential_id,public_key,device_type,created_at,updated_at,disabled_at) VALUES(?,?,?,?,?,?,?,?)",
+    [
+      id,
+      userId,
+      `credential-${id}`,
+      "fixture-public-key",
+      "multiDevice",
+      1609459200,
+      1609459200,
+      disabledAt,
+    ],
+  );
+}
+
+async function accessToken(userId: number): Promise<string> {
+  const time = Math.floor(Date.now() / 1000),
+    token = `access-token-${userId}`;
+  await sql(
+    "INSERT INTO oauth_clients(client_id,name,secret_hash,redirect_uris,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+    [
+      "credential-test",
+      "Credential test",
+      hash("client-secret"),
+      '["https://client.example.com/callback"]',
+      time,
+      time,
+    ],
+  );
+  await sql(
+    "INSERT INTO access_tokens(token_hash,user_id,user_version,client_id,created_at,expires_at) VALUES(?,?,1,?,?,?)",
+    [hash(token), userId, "credential-test", time, time + 3600],
+  );
+  return token;
+}
+
+function userinfo(token: string) {
+  return fetch(address + "/oauth/userinfo", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+async function adminSession(name: string, userId: number): Promise<Admin> {
+  const time = Math.floor(Date.now() / 1000);
+  await sql(
+    "INSERT INTO sessions(token_hash,csrf_token,user_id,user_version,reauthenticated_at,action_token_hash,created_at,expires_at) SELECT ?,?,id,session_version,?,?,?,? FROM users WHERE id=?",
+    [
+      hash(`session-${name}`),
+      `csrf-${name}`,
+      time,
+      hash("action-1"),
+      time,
+      time + 3600,
+      userId,
+    ],
+  );
+  return new Admin(name);
+}
+
 beforeAll(async () => {
   const bundle = await build({
     stdin: {
@@ -161,10 +225,7 @@ beforeAll(async () => {
   address = String(await runtime.ready).replace(/\/$/, "");
   const r = await fetch(address + "/__test/migration", {
     method: "POST",
-    body: await readFile(
-      new URL("../migrations/0001_native_auth.sql", import.meta.url),
-      "utf8",
-    ),
+    body: await readMigrations(),
   });
   expect(r.ok, await r.text()).toBe(true);
 }, 30000);
@@ -214,6 +275,20 @@ beforeEach(async () => {
 });
 
 describe("management authorization with real workerd and D1", () => {
+  it("renders the personal Passkey entry and dialog for an authenticated administrator without changing the management access gate", async () => {
+    const response = await new Admin().request("/management");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('id="account-passkeys-button"');
+    expect(html).toContain('id="account-passkeys-dialog"');
+    expect(html).toContain("/static/account_passkeys.js");
+    expect(html).toContain('name="management-csrf-token" content="csrf-alice"');
+    expect((await new Admin("learner").request("/management")).status).toBe(
+      403,
+    );
+    expect((await fetch(address + "/management")).status).toBe(401);
+  });
+
   it("requires administrator, same-origin CSRF, recent authentication and current action token", async () => {
     expect(
       (await new Admin("learner").request("/api/management/overview")).status,
@@ -400,6 +475,7 @@ describe("management authorization with real workerd and D1", () => {
     const channel = await a.json("/api/management/channel/start", "POST", {
       publicKeyJwk: jwk,
     });
+    expect(channel.nonce_mode).toBe("ack");
     expect(
       (
         await a.request("/api/management/settings/registration", "PATCH", {
@@ -411,6 +487,11 @@ describe("management authorization with real workerd and D1", () => {
       sse = await events.text();
     expect(sse).toContain("event: challenge");
     const payload = JSON.parse(sse.split("data: ")[1].trim());
+    expect(payload.server_nonce).toBe(channel.server_nonce);
+    expect(
+      (await sql("SELECT server_nonce,last_counter FROM management_channels"))
+        .results[0],
+    ).toEqual({ server_nonce: channel.server_nonce, last_counter: 0 });
     const data = {
       channelId: channel.channel_id,
       counter: 1,
@@ -439,7 +520,12 @@ describe("management authorization with real workerd and D1", () => {
       key: key.privateKey,
       dsaEncoding: "ieee-p1363",
     }).toString("base64url");
-    await a.json("/api/management/channel/ack", "POST", data);
+    const acknowledged = await a.json(
+      "/api/management/channel/ack",
+      "POST",
+      data,
+    );
+    expect(acknowledged.server_nonce).not.toBe(channel.server_nonce);
     expect(
       (await a.request("/api/management/channel/ack", "POST", data)).status,
     ).toBe(409);
@@ -454,7 +540,7 @@ describe("management authorization with real workerd and D1", () => {
       "write",
       channel.channel_id,
       "2",
-      payload.server_nonce,
+      acknowledged.server_nonce,
       nonce,
       "PATCH",
       writePath,
@@ -476,10 +562,489 @@ describe("management authorization with real workerd and D1", () => {
       "X-Management-Channel-Effective-Type": "4g",
       "X-Management-Channel-Save-Data": "0",
     };
+    const stale = await a.request(
+      writePath,
+      "PATCH",
+      { mode: "open" },
+      {
+        ...headers,
+        "X-Management-Channel-Signature": sign(
+          "sha256",
+          Buffer.from(
+            writeMessage.replace(
+              acknowledged.server_nonce,
+              channel.server_nonce,
+            ),
+          ),
+          { key: key.privateKey, dsaEncoding: "ieee-p1363" },
+        ).toString("base64url"),
+      },
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      reason: "channel_signature_invalid",
+    });
+    const refreshedEvents = await a.request("/api/management/channel/events");
+    expect(
+      JSON.parse((await refreshedEvents.text()).split("data: ")[1].trim())
+        .server_nonce,
+    ).toBe(acknowledged.server_nonce);
     await a.json(writePath, "PATCH", { mode: "open" }, headers);
     expect(
       (await a.request(writePath, "PATCH", { mode: "closed" }, headers)).status,
     ).toBe(409);
+  });
+  it("atomically accepts one concurrent ACK and rotates its nonce only once", async () => {
+    const admin = new Admin(),
+      key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const channel = await admin.json("/api/management/channel/start", "POST", {
+      publicKeyJwk: key.publicKey.export({ format: "jwk" }),
+    });
+    const nonce = randomBytes(18).toString("base64url");
+    const message = [
+      "passkey-management-channel-v1",
+      "ack",
+      channel.channel_id,
+      "1",
+      channel.server_nonce,
+      nonce,
+      "POST",
+      "/api/management/channel/ack",
+      "visible",
+      "4g",
+      "0",
+      "0",
+    ].join("\n");
+    const data = {
+      channelId: channel.channel_id,
+      counter: 1,
+      clientNonce: nonce,
+      visibility: "visible",
+      effectiveType: "4g",
+      saveData: false,
+      rttMs: 0,
+      signature: sign("sha256", Buffer.from(message), {
+        key: key.privateKey,
+        dsaEncoding: "ieee-p1363",
+      }).toString("base64url"),
+    };
+    const replies = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        admin.request("/api/management/channel/ack", "POST", data),
+      ),
+    );
+    expect(replies.filter((reply) => reply.status === 200)).toHaveLength(1);
+    expect(replies.filter((reply) => reply.status === 409)).toHaveLength(5);
+    const accepted = (await replies
+      .find((reply) => reply.status === 200)!
+      .json()) as any;
+    expect(accepted.server_nonce).not.toBe(channel.server_nonce);
+    expect(
+      (await sql("SELECT server_nonce,last_counter FROM management_channels"))
+        .results[0],
+    ).toEqual({ server_nonce: accepted.server_nonce, last_counter: 1 });
+  });
+});
+
+describe("individual Passkey administration", () => {
+  it("disables only the selected credential and revokes existing sessions and tokens without restoring them on re-enable", async () => {
+    await credential(31, 3);
+    await credential(32, 3);
+    await credential(21, 2);
+    const token = await accessToken(3),
+      admin = new Admin(),
+      learner = new Admin("learner");
+    expect((await userinfo(token)).status).toBe(200);
+    expect((await learner.json("/api/me")).authenticated).toBe(true);
+    await admin.json("/api/management/users/3/credentials/31", "PATCH", {
+      disabled: true,
+    });
+    const rows = (
+      await sql("SELECT id,disabled_at,created_at FROM credentials ORDER BY id")
+    ).results;
+    expect(rows[0].disabled_at).toBeNull();
+    expect(rows[1].disabled_at).toBeGreaterThan(0);
+    expect(rows[2].disabled_at).toBeNull();
+    expect(rows[1].created_at).toBe(1609459200);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(2);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=2")).results[0]
+        .session_version,
+    ).toBe(1);
+    expect((await learner.json("/api/me")).authenticated).toBe(false);
+    expect((await userinfo(token)).status).toBe(401);
+    let user = (await admin.json("/api/management/overview")).users.find(
+      (u: any) => u.id === 3,
+    );
+    expect(user).toMatchObject({
+      credentialCount: 2,
+      activeCredentialCount: 1,
+    });
+    expect(user.credentials.find((c: any) => c.id === 31)).toMatchObject({
+      createdAt: 1609459200,
+      disabledAt: rows[1].disabled_at,
+    });
+    await admin.json("/api/management/users/3/credentials/31", "PATCH", {
+      disabled: false,
+    });
+    expect(
+      (await sql("SELECT disabled_at FROM credentials WHERE id=31")).results[0]
+        .disabled_at,
+    ).toBeNull();
+    expect((await learner.json("/api/me")).authenticated).toBe(false);
+    expect((await userinfo(token)).status).toBe(401);
+    user = (await admin.json("/api/management/overview")).users.find(
+      (u: any) => u.id === 3,
+    );
+    expect(user).toMatchObject({
+      credentialCount: 2,
+      activeCredentialCount: 2,
+    });
+    expect(
+      (await sql("SELECT action FROM audit_logs ORDER BY id")).results.map(
+        (r: any) => r.action,
+      ),
+    ).toEqual(["credential.disable", "credential.enable"]);
+  });
+
+  it("deletes the exact credential while preserving other keys and revoking the target account's sessions and tokens", async () => {
+    await credential(31, 3, 1609459300);
+    await credential(32, 3);
+    const token = await accessToken(3),
+      admin = new Admin();
+    await admin.json("/api/management/users/3/credentials/31", "DELETE");
+    expect(
+      (await sql("SELECT id FROM credentials ORDER BY id")).results,
+    ).toEqual([{ id: 32 }]);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(2);
+    expect((await new Admin("learner").json("/api/me")).authenticated).toBe(
+      false,
+    );
+    expect((await userinfo(token)).status).toBe(401);
+    expect(
+      (
+        await sql(
+          "SELECT details FROM audit_logs WHERE action='credential.delete'",
+        )
+      ).results[0].details,
+    ).toBe(JSON.stringify({ credentialId: 31 }));
+  });
+
+  it("rejects incorrect owners, missing keys, non-administrators, removal of the last own key and non-boolean status", async () => {
+    await credential(31, 3);
+    await credential(11, 1);
+    const admin = new Admin();
+    for (const method of ["PATCH", "DELETE"]) {
+      const data = method === "PATCH" ? { disabled: true } : undefined;
+      expect(
+        (
+          await admin.request(
+            "/api/management/users/2/credentials/31",
+            method,
+            data,
+          )
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await admin.request(
+            "/api/management/users/3/credentials/999",
+            method,
+            data,
+          )
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await admin.request(
+            "/api/management/users/1/credentials/11",
+            method,
+            data,
+          )
+        ).status,
+      ).toBe(409);
+      expect(
+        (
+          await new Admin("learner").request(
+            "/api/management/users/3/credentials/31",
+            method,
+            data,
+          )
+        ).status,
+      ).toBe(403);
+    }
+    for (const data of [
+      {},
+      { disabled: "false" },
+      { disabled: 1 },
+      { disabled: null },
+    ]) {
+      expect(
+        (
+          await admin.request(
+            "/api/management/users/3/credentials/31",
+            "PATCH",
+            data,
+          )
+        ).status,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await sql(
+          "SELECT COUNT(*) n FROM credentials WHERE disabled_at IS NOT NULL",
+        )
+      ).results[0].n,
+    ).toBe(0);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(1);
+    expect(
+      (await sql("SELECT action_token_hash FROM sessions WHERE user_id=1"))
+        .results[0].action_token_hash,
+    ).toBe(hash(admin.token));
+  });
+
+  it("allows self-management with a second active key, requires new authentication and never revives prior sessions", async () => {
+    await credential(11, 1);
+    await credential(12, 1);
+    const token = await accessToken(1),
+      original = new Admin();
+    await original.json("/api/management/users/1/credentials/11", "PATCH", {
+      disabled: true,
+    });
+    expect((await original.json("/api/me")).authenticated).toBe(false);
+    expect((await userinfo(token)).status).toBe(401);
+    expect(
+      (
+        await original.request(
+          "/api/management/users/1/credentials/11",
+          "PATCH",
+          { disabled: false },
+        )
+      ).status,
+    ).toBe(401);
+    const authenticatedAgain = await adminSession("alice-reauthenticated", 1);
+    await authenticatedAgain.json(
+      "/api/management/users/1/credentials/11",
+      "PATCH",
+      { disabled: false },
+    );
+    expect(
+      (await sql("SELECT disabled_at FROM credentials WHERE id=11")).results[0]
+        .disabled_at,
+    ).toBeNull();
+    expect((await original.json("/api/me")).authenticated).toBe(false);
+    expect((await authenticatedAgain.json("/api/me")).authenticated).toBe(
+      false,
+    );
+    expect((await userinfo(token)).status).toBe(401);
+    const latest = await adminSession("alice-new-login", 1);
+    await latest.json("/api/management/users/1/credentials/11", "DELETE");
+    expect(
+      (await sql("SELECT id FROM credentials WHERE user_id=1")).results,
+    ).toEqual([{ id: 12 }]);
+    const finalLogin = await adminSession("alice-last-key", 1);
+    for (const method of ["PATCH", "DELETE"]) {
+      const response = await finalLogin.request(
+        "/api/management/users/1/credentials/12",
+        method,
+        method === "PATCH" ? { disabled: true } : undefined,
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: "至少保留一个已启用的 Passkey",
+      });
+    }
+    expect(
+      (await finalLogin.request("/api/management/users/1", "DELETE")).status,
+    ).toBe(409);
+    expect(
+      (
+        await finalLogin.request(
+          "/api/management/users/1/revoke-sessions",
+          "POST",
+          {},
+        )
+      ).status,
+    ).toBe(409);
+  });
+
+  it("allows deletion of an own disabled key without touching the remaining active key", async () => {
+    await credential(11, 1, 1609459300);
+    await credential(12, 1);
+    const admin = new Admin();
+    await admin.json("/api/management/users/1/credentials/11", "DELETE");
+    expect(
+      (await sql("SELECT id,disabled_at FROM credentials WHERE user_id=1"))
+        .results,
+    ).toEqual([{ id: 12, disabled_at: null }]);
+    expect((await admin.json("/api/me")).authenticated).toBe(false);
+  });
+
+  it("preserves an active own key under concurrent requests from separately authenticated sessions", async () => {
+    await credential(11, 1);
+    await credential(12, 1);
+    const first = new Admin(),
+      second = await adminSession("alice-parallel", 1);
+    const responses = await Promise.all([
+      first.request("/api/management/users/1/credentials/11", "PATCH", {
+        disabled: true,
+      }),
+      second.request("/api/management/users/1/credentials/12", "DELETE"),
+    ]);
+    expect(responses.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(responses.every((r) => [200, 401, 409].includes(r.status))).toBe(
+      true,
+    );
+    expect(
+      (
+        await sql(
+          "SELECT COUNT(*) n FROM credentials WHERE user_id=1 AND disabled_at IS NULL",
+        )
+      ).results[0].n,
+    ).toBe(1);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=1")).results[0]
+        .session_version,
+    ).toBe(2);
+  });
+
+  it("rechecks the last active own key inside the transaction rather than relying on the UI count", async () => {
+    await credential(11, 1);
+    await credential(12, 1);
+    const admin = new Admin();
+    const response = await admin.request(
+      "/api/management/users/1/credentials/11",
+      "DELETE",
+      undefined,
+      {
+        "x-test-before-batch-sql": "DELETE FROM credentials WHERE id=12",
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(
+      (await sql("SELECT id,disabled_at FROM credentials WHERE user_id=1"))
+        .results,
+    ).toEqual([{ id: 11, disabled_at: null }]);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=1")).results[0]
+        .session_version,
+    ).toBe(1);
+    expect(
+      (await sql("SELECT action_token_hash FROM sessions WHERE user_id=1"))
+        .results[0].action_token_hash,
+    ).toBe(hash(admin.token));
+  });
+
+  it("accepts only one concurrent status change and rejects reuse of its operation token", async () => {
+    await credential(31, 3);
+    const admin = new Admin(),
+      path = "/api/management/users/3/credentials/31";
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        admin.request(path, "PATCH", { disabled: true }),
+      ),
+    );
+    expect(responses.map((r) => r.status).sort()).toEqual([
+      200, 409, 409, 409, 409, 409,
+    ]);
+    expect(
+      (await admin.request(path, "PATCH", { disabled: false })).status,
+    ).toBe(409);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(2);
+    expect(
+      (
+        await sql(
+          "SELECT COUNT(*) n FROM audit_logs WHERE action='credential.disable'",
+        )
+      ).results[0].n,
+    ).toBe(1);
+  });
+
+  it("rechecks credential existence and ownership inside the write transaction", async () => {
+    await credential(31, 3);
+    const admin = new Admin();
+    const response = await admin.request(
+      "/api/management/users/3/credentials/31",
+      "PATCH",
+      { disabled: true },
+      {
+        "x-test-before-batch-sql":
+          "UPDATE credentials SET user_id=2 WHERE id=31",
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(
+      (await sql("SELECT user_id,disabled_at FROM credentials WHERE id=31"))
+        .results[0],
+    ).toEqual({ user_id: 2, disabled_at: null });
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(1);
+    expect(
+      (await sql("SELECT action_token_hash FROM sessions WHERE user_id=1"))
+        .results[0].action_token_hash,
+    ).toBe(hash(admin.token));
+    await credential(32, 3);
+    expect(
+      (
+        await admin.request(
+          "/api/management/users/3/credentials/32",
+          "DELETE",
+          undefined,
+          {
+            "x-test-before-batch-sql": "DELETE FROM credentials WHERE id=32",
+          },
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(1);
+  });
+
+  it("rejects a concurrent credential status change and requires the signed management channel when one is active", async () => {
+    await credential(31, 3);
+    const admin = new Admin(),
+      path = "/api/management/users/3/credentials/31";
+    const response = await admin.request(
+      path,
+      "PATCH",
+      { disabled: true },
+      {
+        "x-test-before-batch-sql":
+          "UPDATE credentials SET disabled_at=1609459300 WHERE id=31",
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(
+      (await sql("SELECT session_version FROM users WHERE id=3")).results[0]
+        .session_version,
+    ).toBe(1);
+    const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    await admin.json("/api/management/channel/start", "POST", {
+      publicKeyJwk: pair.publicKey.export({ format: "jwk" }),
+    });
+    expect(
+      (await admin.request(path, "PATCH", { disabled: false })).status,
+    ).toBe(409);
+    expect(
+      (await sql("SELECT disabled_at FROM credentials WHERE id=31")).results[0]
+        .disabled_at,
+    ).toBe(1609459300);
   });
 });
 

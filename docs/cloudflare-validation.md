@@ -2,7 +2,7 @@
 
 Implementation and validation completed on 2026-10-03 in the existing Passkey-Auth repository, branch `codex/cloudflare-native`. This record separates local proof, deployed behavior and the remaining Free-tier uncertainty.
 
-## Baseline and local evidence
+## Initial migration baseline and local evidence
 
 - Includes the effective PR #11 OAuth/PKCE/signup changes and the original checkout's uncommitted in-place homepage login change. No automatic PR merge occurred. The original dirty checkout and PPQ were not modified.
 - 34 Python baseline screenshots and 29 native screenshots: desktop 1280×900, mobile 390×844, dark appearance, registration, recovery, demos and all eight Management views. Local artifacts are retained under ignored `.cache/validation/python-baseline/` and `.cache/validation/native/`.
@@ -24,7 +24,7 @@ npm run build
 node test/browser/run.mjs
 ```
 
-## Public environment and acceptance
+## Initial migration public environment and acceptance
 
 - Worker: `jason-passkey-auth-beta`; origin/RP: `https://auth.jasonstu.cc` / `auth.jasonstu.cc`.
 - Final deployed version: `57286597-6481-4acc-80cf-c8c4ff7d3d93`. The last upload contains formatting-only changes after the optimized browser-tested version `46b06898-5c08-4197-8acb-9048f6686f11`.
@@ -55,10 +55,21 @@ Sources: [Workers limits and CPU flexibility](https://developers.cloudflare.com/
 
 ## Remaining acceptance and operator steps
 
-- Create the real administrator with `npm run operator -- recovery --origin https://auth.jasonstu.cc --remote` from `worker/`. The command writes a private 0600 bootstrap file; visit its one-use URL within 15 minutes and register the desired username/Passkey. No live bootstrap URL is committed or printed in this report.
+- The operator has since created the real administrator. Do not repeat initialization or rebuild its data. Additional trusted recovery, if required, uses `npm run operator -- recovery --origin https://auth.jasonstu.cc --remote` from `worker/`; the one-use URL is saved to a private 0600 file, not printed or committed.
 - Then create consuming applications' real OAuth clients and enable public registration only when desired. Existing test clients/identities are intentionally not migrated. The built-in demo client is initialized; no real application client is provisioned implicitly.
 - Verify a real hardware/platform authenticator on the target Safari/iCloud/Android devices. Chromium virtual authenticators establish protocol/browser behavior, not every physical device combination.
 - Optional external Jason/custom telemetry was tested with local protocol fixtures, including pairing and failure/concurrency behavior. No unrelated live telemetry service was reconfigured. The production default remains off.
 - The cron handler has native workerd/D1 coverage, but the first real scheduled cloud execution has not yet occurred. Long-duration operation, sustained cold-start CPU and populated-account Free limits remain unverified.
 
 This is a major runtime replacement, delivered for review through a PR. It is not automatically merged into `main`, and the open earlier PR is not automatically merged or closed.
+
+## 2026-10-03 — Multiple-Passkey follow-up
+
+- **109 Worker tests** and `npm run typecheck` passed. The local browser suite passed with **34 screenshots**, covering desktop/mobile Passkeys dialogs, additional-credential enrollment while registration is closed, inline UV reauthentication, cancelled enrollment, a second virtual USB authenticator, stable account/OAuth identity, and administrator operations on an individual credential. The first credential continued to sign in after the second was disabled or deleted.
+- The browser suite also reproduces network timing explicitly: the real SSE response is delayed by **600 ms**, and the first real ACK response is held while a management write is requested. Before the fix this produced `409 channel_signature_invalid`; after the fix the ACK returned **200**, no write was sent before its response, and subsequent signed management writes succeeded. Native SSE now reads the challenge without rotating it; successful ACKs rotate the nonce atomically, and the browser serializes ACKs and management writes. Run this regression with `PASSKEY_BROWSER_DELAY_CHANNEL=1 node test/browser/run.mjs` from `worker/`.
+- **R3 deployed browser acceptance passed** on version `8557cc9a-f157-4eff-9c60-8d6e58e9be48`, from **15:18:42.305 to 15:20:08.592 UTC**. Two scoped synthetic accounts exercised recovery, explicit security-key creation with required UV and a nonempty account display name, independent-device login with the same account ID/subject, cancellation, desktop/mobile layout, and precise disable/enable/delete operations. All three credential-management writes returned **200**. Disabled/deleted credentials were rejected while the first credential remained usable. The run recorded **zero channel errors, zero acceptance failures, zero JavaScript exceptions, zero 5xx responses and zero browser telemetry requests**.
+- This run used working **system DNS** and the real `https://auth.jasonstu.cc` origin, with normal certificate verification. No proxy, URL rewriting, local bridge or system network change was used. Public registration remained **closed** throughout; only the two synthetic accounts were selected for mutations.
+- **R3 cleanup verified through Cloudflare MCP.** No rows remain for the run's synthetic users, credentials, sessions, recovery grants, login history or audit history. The original account identity and active credential match the protected baseline; administrator/login permissions remain enabled and public registration remains **closed**. The private manifest is marked `cleanupPending: false` and `cleanupVerified: true`; the consumed local grant file was removed.
+- **Physical Safari + YubiKey 5C enrollment has not passed acceptance.** Safari Technology Preview's authentication process returned `CTAP 0x03` (invalid message/item length) during `makeCredential`, before a PIN prompt. Read-only `getInfo` checks showed the PIN retry count unchanged at eight; the inspected excluded credential ID was 20 bytes, below the advertised 128-byte maximum. The root cause remains unconfirmed. Successful Chromium virtual USB authentication does not establish compatibility with that physical browser/device combination or a fix for this failure.
+
+The measured resource envelope and **10 ms Free-tier CPU boundary** above remain applicable. This follow-up adds functional and concurrency evidence; it did not collect a new CPU benchmark or resolve the earlier P99 uncertainty.

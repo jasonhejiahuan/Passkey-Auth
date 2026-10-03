@@ -79,4 +79,6 @@ Sources: [Workers limits](https://developers.cloudflare.com/workers/platform/lim
 
 The Python modules and tests remain as a reference for the original UI and business semantics. They are not a production backend or a fallback for the Worker. The old Linux provision/backup path is retired; never launch it as part of Cloudflare setup. Previously published standalone desktop apps keep their own local database and do not share Cloudflare identity state. The desktop build workflow is retained only as a manually invoked legacy build; a new cloud release does not automatically build or publish a second local authentication server.
 
+The retained Python dependencies require cryptography 49 to fix [CVE-2026-69249](https://github.com/pyca/cryptography/security/advisories/GHSA-jwv3-5hgf-82ww). [Version 49 removed macOS Intel support](https://cryptography.io/en/49.0.0/changelog/#v49-0-0), so that desktop build target has been removed. Intel Mac users can use the Cloudflare service in a browser. Manual builds remain available for macOS ARM64, Windows x64, and Linux x64.
+
 Use `npm run dev` for current local development. No old SQLite database, session, authorization code or passkey migration is provided because this deployment starts with disposable test identities.

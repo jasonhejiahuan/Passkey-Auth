@@ -2,6 +2,8 @@
 
 This archived guide does not describe the supported Cloudflare runtime. Do not use its VPS instructions for a new cloud deployment. See [Cloudflare setup](cloudflare-native.md).
 
+当前 Python 依赖使用 cryptography 49，修复 [CVE-2026-69249](https://github.com/pyca/cryptography/security/advisories/GHSA-jwv3-5hgf-82ww)。[cryptography 49 已移除 macOS Intel 支持](https://cryptography.io/en/49.0.0/changelog/#v49-0-0)，因此不再构建该平台的旧版桌面程序；可通过浏览器使用 Cloudflare 版本。macOS ARM64、Windows x64 和 Linux x64 保留手动构建入口。
+
 # Passkey Auth
 
 一个使用 Python、Flask 和 `py_webauthn`（包名 `webauthn`）实现的 passkey 注册、登录、OAuth / SSO 认证服务。
@@ -54,11 +56,10 @@ python3 -m venv .venv
 
 - Windows x64：`Passkey-Auth-windows-x64.zip`
 - Linux x64：`Passkey-Auth-linux-x64.tar.gz`
-- macOS Intel：`Passkey-Auth-macos-x64.zip`
 - macOS Apple Silicon：`Passkey-Auth-macos-arm64.zip`
 
-在 GitHub Actions 中手动运行 `Build desktop apps` 后，可从该次运行的
-**Artifacts** 下载。推送 `V*` 标签（例如 `V3.0.0`）时，产物还会自动附加到对应
+在 GitHub Actions 中手动运行 `Build legacy desktop apps` 后，可从该次运行的
+**Artifacts** 下载。以 `V*` 标签（例如 `V3.0.0`）为 ref 手动运行时，产物还会附加到对应
 GitHub Release。
 
 桌面版本启动后会自动打开浏览器。数据库与固定的 Flask Session Secret 保存在

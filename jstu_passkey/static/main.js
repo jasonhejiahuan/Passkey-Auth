@@ -252,6 +252,46 @@ async function loginWithPasskey(options = {}) {
     showAuthenticatedStatus();
     return;
   }
+  if (!isHomePage()) {
+    redirectToPasskeyPage();
+    return;
+  }
+  if (sessionActionInProgress) {
+    return;
+  }
+  sessionActionInProgress = true;
+  try {
+    await runPasskeyAction(async () => {
+      const { authFlowToken } = await postJson("/auth/passkey/flow", {});
+      const { publicKey } = await postJson("/auth/passkey/options", {
+        username: options.username || "",
+        mode: "login",
+        authFlowToken,
+      });
+      const assertion = await navigator.credentials.get({
+        publicKey: decodeRequestOptions(publicKey),
+      });
+      if (!assertion) {
+        throw new DOMException("Passkey 验证已取消", "AbortError");
+      }
+      const verification = await postJson("/auth/passkey/verify", {
+        credential: encodeAuthenticationCredential(assertion),
+        authFlowToken,
+      });
+      if (verification.action_token) {
+        window.sessionStorage.setItem(
+          "passkey-action-token",
+          verification.action_token,
+        );
+      }
+      await refreshSession();
+    });
+  } finally {
+    sessionActionInProgress = false;
+  }
+}
+
+function redirectToPasskeyPage() {
   const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   const query = new URLSearchParams({ return_to: returnTo });
   window.location.assign(`/auth/passkey?${query}`);

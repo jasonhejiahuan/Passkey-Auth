@@ -135,6 +135,17 @@ def create_app() -> Flask:
             }
         )
 
+    @app.post("/auth/passkey/flow")
+    def passkey_auth_flow():
+        return _no_store(
+            jsonify(
+                {
+                    "ok": True,
+                    "authFlowToken": _new_auth_flow_token(),
+                }
+            )
+        )
+
     @app.post("/api/telemetry/browser-token")
     def telemetry_browser_token():
         payload, status = _create_telemetry_browser_token(app)

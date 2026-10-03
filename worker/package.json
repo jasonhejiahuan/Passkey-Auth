@@ -1,0 +1,33 @@
+{
+  "name": "jason-passkey-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var PASSKEY_RP_ID:localhost --var PASSKEY_ORIGIN:http://localhost:8787",
+    "build": "node scripts/build-assets.mjs && wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "node scripts/build-assets.mjs && wrangler deploy",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
+    "operator": "node scripts/operator.mjs",
+    "pretest": "node scripts/build-assets.mjs",
+    "pretypecheck": "node scripts/build-assets.mjs",
+    "predev": "node scripts/build-assets.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "14.0.3",
+    "nunjucks": "3.2.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@playwright/test": "latest",
+    "@types/nunjucks": "3.2.6",
+    "esbuild": "latest",
+    "miniflare": "latest",
+    "typescript": "^5.9.3",
+    "vitest": "latest",
+    "wrangler": "latest"
+  }
+}

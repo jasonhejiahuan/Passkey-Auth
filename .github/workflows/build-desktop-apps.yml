@@ -1,10 +1,7 @@
-name: Build desktop apps
+name: Build legacy desktop apps
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "V*"
 
 permissions:
   contents: read

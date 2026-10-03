@@ -13,20 +13,17 @@ Read the project Wiki before broad changes:
 
 ## Project Map
 
-- `jstu_passkey/app.py`: Flask routes, OAuth flow, link challenge flow, session verify API.
-- `jstu_passkey/config.py`: default config values and environment overrides.
-- `jstu_passkey/storage.py`: SQLite users, credentials, OAuth codes, challenge requests.
-- `jstu_passkey/telemetry.py`: cached telemetry policy gate, signed collection tokens,
-  lazy backend selection, isolated SQLite events, retention, statistics, and CSV export.
-- `jstu_passkey/telemetry_delivery.py`: bounded asynchronous external-delivery queue.
-- `jstu_passkey/telemetry_backends/`: lazy-loaded jason-telemetry and custom HTTP adapters.
-- `integrations/jason-telemetry/telemetry_server_v13_both.py`: optional v13 server
-  with automatic Passkey-Auth API-key pairing while preserving v12 data APIs.
-- `jstu_passkey/management.py`: `/management` UI APIs, permissions, CSV export, and log cleanup.
-- `jstu_passkey/webauthn_service.py`: WebAuthn option generation and verification.
-- `jstu_passkey/static/`: browser passkey flows and UI behavior.
-- `jstu_passkey/templates/`: minimal Auth WebUI and dedicated example pages.
-- `tests/`: config, registration gate, OAuth, and challenge flow tests.
+- `worker/src/index.ts`: native Worker routing, request context, security headers and scheduled cleanup.
+- `worker/src/auth.ts`: registration, passkeys, login and trusted-operator recovery.
+- `worker/src/oauth.ts`: OAuth/PKCE, link challenges, server verification and demos.
+- `worker/src/store.ts`, `worker/migrations/`: authoritative D1 state, guarded transactions and versioned schema.
+- `worker/src/management.ts`: Management permissions, signed channels, rotating operation tokens, exports and settings.
+- `worker/src/telemetry.ts`: optional collection, privacy policy, built-in/Jason/custom delivery and reporting.
+- `worker/src/pages.ts`, `worker/scripts/build-assets.mjs`: precompiled original templates and static assets.
+- `worker/test/`: native workerd/D1 security tests and local/public browser acceptance.
+- `jstu_passkey/static/`, `jstu_passkey/templates/`: shared original UI source.
+- `jstu_passkey/*.py`, `tests/`, `integrations/`: legacy desktop/reference implementation, not a cloud backend.
+- `docs/cloudflare-native.md`, `docs/cloudflare-validation.md`: current operations and measured verification.
 
 ## Safety Invariants
 
@@ -38,29 +35,31 @@ Keep these true:
 - Link challenges are single-use; `status=success` is display-only, never auth proof.
 - `client_secret`, server API tokens, session cookies, access tokens, and raw credentials must not be exposed in browser UI or committed.
 - Registration stays disabled by default.
-- The v2 database is intentionally fresh-start only; do not add legacy schema migrations or old `PASSKEY_OAUTH_DEMO_*` aliases.
+- The native database is intentionally fresh-start only. Apply numbered D1 migrations; never edit an applied migration or add a legacy data-import path.
 - Management writes require admin session, CSRF, recent Passkey authentication,
   and the current rotating action token.
-- Recovery tokens are one-use, hash-only, and must be validated before the server starts.
+- Recovery tokens are operator-created, one-use, hash-only, time-limited, session-bound during registration and consumed atomically.
 - `PASSKEY_ORIGIN` must match the browser origin used for WebAuthn.
 - Telemetry collection tokens are short-lived, policy-bound, one-use, and never
   identity or authorization proof.
 - The telemetry master switch must stay a true hot-path short circuit: when off,
-  do not open the telemetry database, rewrite HTML, load telemetry JS, or create
-  browser network work.
+  do not query telemetry event tables, rewrite HTML, load telemetry JS, or create
+  browser network work. Explicit administrator requests may inspect stored history while collection is off.
 - External telemetry API keys and private headers stay server-side. Direct browser
   delivery may use only a short-lived external target or explicitly public headers.
-- Unselected telemetry backend modules must not be imported or initialized.
+- Unselected telemetry backends must not create external requests or initialize active delivery state.
 
 ## Development Loop
 
-Run tests with the local virtualenv:
+The supported server is the native Cloudflare Worker in `worker/`. For current changes run `cd worker && npm run typecheck && npm test && npm run build`. Browser regressions run `node test/browser/run.mjs`. Original templates/static remain the UI source. Python tests below only validate the archived local/desktop implementation.
+
+Legacy tests:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-For local browser testing:
+For legacy desktop browser testing only:
 
 ```bash
 PORT=5003 PASSKEY_ORIGIN=http://localhost:5003 .venv/bin/python -m jstu_passkey.app
@@ -75,7 +74,7 @@ for destructive actions.
 ## Change Style
 
 - Prefer focused patches over broad rewrites.
-- Follow existing Flask, SQLite, and plain JavaScript patterns.
+- Follow native Workers TypeScript, D1 transaction semantics, and the existing plain JavaScript UI. Do not add a VPS/Python runtime dependency.
 - Keep the UI quiet, modern, and user-first.
 - Keep documentation in sync with behavior.
 - Do not commit `.env`, SQLite databases, `.venv`, `.DS_Store`, generated caches, or real secrets.

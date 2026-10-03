@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jason-passkey-auth-beta",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/auth/*",
+      "/oauth/*",
+      "/management",
+      "/demo/*",
+      "/.well-known/*",
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jason-passkey-auth-beta",
+      "database_id": "ef061c6c-a56b-4837-9740-e8efed4f0524",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "vars": {
+    "PASSKEY_RP_ID": "auth.jasonstu.cc",
+    "PASSKEY_RP_NAME": "JSTU Passkey",
+    "PASSKEY_ORIGIN": "https://auth.jasonstu.cc",
+  },
+  "observability": {
+    "enabled": false,
+  },
+  "triggers": {
+    "crons": ["17 3 * * *"],
+  },
+  "account_id": "d40645290baa61f12d795a3cc453d4a5",
+  "routes": [
+    {
+      "pattern": "auth.jasonstu.cc",
+      "custom_domain": true,
+    },
+  ],
+}

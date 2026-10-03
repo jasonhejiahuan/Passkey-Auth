@@ -1,3 +1,5 @@
+> Retired deployment path. The supported server is now the [native Cloudflare Worker](cloudflare-native.md). This file is retained only as historical evidence, not an installation guide.
+
 # Isolated Linux service
 
 The provider keeps its original Flask routes, SQLite transactions and Jason-Passkey UI.

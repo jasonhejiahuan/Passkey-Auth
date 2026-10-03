@@ -1,3 +1,5 @@
+> Retired deployment path. The supported server is now the [native Cloudflare Worker](cloudflare-native.md). This file is retained only as historical evidence, not an installation guide.
+
 # Python Workers feasibility result — 2026-10-03
 
 The original Flask application can be adapted to Python Workers, but this measured

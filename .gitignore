@@ -14,3 +14,13 @@ dist/
 
 .cache/
 .wrangler/
+
+# Native Cloudflare build and private operator material
+worker/node_modules/
+worker/public/
+worker/src/generated/
+worker/.local/
+worker/.dev.vars
+worker/.env*
+worker/test-results/
+worker/playwright-report/

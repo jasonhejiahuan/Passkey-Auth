@@ -25,6 +25,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig, ServerConfig
 from .management import create_management_blueprint
+from .oauth_security import new_authorization_code, valid_s256_challenge, verify_code_pkce
 from .register_client import REGISTER_CLIENT_JS
 from .storage import OAuthChallengeRequest, PasskeyStore, User
 from .telemetry import TelemetryRuntime
@@ -132,6 +133,17 @@ def create_app() -> Flask:
                     "username": user.username,
                 },
             }
+        )
+
+    @app.post("/auth/passkey/flow")
+    def passkey_auth_flow():
+        return _no_store(
+            jsonify(
+                {
+                    "ok": True,
+                    "authFlowToken": _new_auth_flow_token(),
+                }
+            )
         )
 
     @app.post("/api/telemetry/browser-token")
@@ -493,12 +505,33 @@ def create_app() -> Flask:
             )
         )
 
+    @app.get("/.well-known/oauth-authorization-server")
+    def oauth_metadata():
+        issuer = (app.config["PASSKEY_ORIGIN"] or request.url_root).rstrip("/")
+        return _no_store(jsonify({
+            "issuer": issuer,
+            "authorization_endpoint": issuer + "/oauth/authorize",
+            "token_endpoint": issuer + "/oauth/token",
+            "userinfo_endpoint": issuer + "/oauth/userinfo",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_post", "client_secret_basic"
+            ],
+            "code_challenge_methods_supported": ["S256"],
+            "registration_screen_hint_supported": True,
+        }))
+
     @app.get("/oauth/authorize")
     def oauth_authorize():
         response_type = request.args.get("response_type", "")
         client_id = request.args.get("client_id", "")
         redirect_uri = request.args.get("redirect_uri", "")
         state = request.args.get("state", "")
+        code_challenge = request.args.get("code_challenge", "")
+        code_challenge_method = request.args.get("code_challenge_method", "")
+        screen_hint = request.args.get("screen_hint", "")
+        login_hint = request.args.get("login_hint", "")
 
         client = _oauth_client(app, client_id)
         if not client or redirect_uri not in client["redirect_uris"]:
@@ -517,6 +550,39 @@ def create_app() -> Flask:
                 "仅支持 authorization code flow",
             )
 
+        if not state or len(state) > 512:
+            return _oauth_redirect_error(redirect_uri, state, "invalid_request", "state 必填且不能超过 512 字符")
+        if (code_challenge or code_challenge_method) and not valid_s256_challenge(
+            code_challenge, code_challenge_method
+        ):
+            return _oauth_redirect_error(redirect_uri, state, "invalid_request", "仅支持有效的 S256 PKCE")
+        if screen_hint not in {"", "signup"}:
+            return _oauth_redirect_error(redirect_uri, state, "invalid_request", "未知的 screen_hint")
+        try:
+            username = normalize_username(login_hint) if login_hint or screen_hint == "signup" else ""
+        except ValueError as exc:
+            return _oauth_redirect_error(redirect_uri, state, "invalid_request", str(exc))
+        # A new business account can reuse an existing provider identity, but only
+        # after a fresh Passkey ceremony for the supplied username.
+        create_identity = screen_hint == "signup" and not store.get_user_by_username(username)
+        if create_identity and not _registration_enabled(app):
+            return _oauth_redirect_error(redirect_uri, state, "access_denied", "注册功能未启用")
+        session["oauth_request"] = {
+            "request_id": secrets.token_urlsafe(24),
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": code_challenge,
+            "username": username,
+            "screen_hint": "signup" if create_identity else "",
+            "expires_at": int(time.time()) + app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"],
+        }
+        if create_identity:
+            session["registration_unlocked"] = True
+            session["registration_unlock_expires_at"] = (
+                int(time.time()) + app.config["REGISTER_UNLOCK_TTL_SECONDS"]
+            )
+
         return render_template(
             "oauth_authorize.html",
             ok=True,
@@ -526,9 +592,13 @@ def create_app() -> Flask:
             redirect_uri=redirect_uri,
             state=state,
             challenge_id="",
-            username="",
+            username=username,
+            screen_hint="signup" if create_identity else "",
             auth_flow_token=_new_auth_flow_token(),
-            error_redirect_uri=_oauth_error_redirect_uri(redirect_uri),
+            error_redirect_uri=(
+                redirect_uri if code_challenge or screen_hint
+                else _oauth_error_redirect_uri(redirect_uri)
+            ),
         )
 
     @app.post("/oauth/authorize/complete")
@@ -537,12 +607,22 @@ def create_app() -> Flask:
         client_id = data.get("client_id", "")
         redirect_uri = data.get("redirect_uri", "")
         state = data.get("state", "")
+        pending = session.get("oauth_request", {})
+        if (
+            not pending
+            or pending.get("expires_at", 0) < int(time.time())
+            or any(
+                pending.get(key) != data.get(key, "")
+                for key in ("client_id", "redirect_uri", "state")
+            )
+        ):
+            return _error("OAuth 授权会话无效或已过期", 400)
         client = _oauth_client(app, client_id)
         if not client or redirect_uri not in client["redirect_uris"]:
             return _error("OAuth client 或 redirect_uri 无效", 400)
 
         user = _current_user(store, session)
-        if not user:
+        if not user or pending.get("authenticated_user_id") != user.id:
             return _error("请先完成 Passkey 登录", 401)
         if not _user_can_access_client(
             store,
@@ -567,8 +647,11 @@ def create_app() -> Flask:
             redirect_uri=redirect_uri,
             user_id=user.id,
             ttl_seconds=app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"],
-            code_factory=lambda: secrets.token_urlsafe(32),
+            code_factory=lambda: new_authorization_code(
+                app.secret_key, pending.get("code_challenge", "")
+            ),
         )
+        session.pop("oauth_request", None)
         store.record_login(
             user=user,
             client_id=client_id,
@@ -594,6 +677,8 @@ def create_app() -> Flask:
     @app.post("/oauth/token")
     def oauth_token():
         data = _oauth_request_data()
+        if data.get("grant_type", "authorization_code") != "authorization_code":
+            return _no_store(jsonify({"error": "unsupported_grant_type"})), 400
         client_id, client_secret = _oauth_client_credentials(data)
         payload, status = _exchange_authorization_code(
             app=app,
@@ -602,6 +687,7 @@ def create_app() -> Flask:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=data.get("redirect_uri", ""),
+            code_verifier=data.get("code_verifier", ""),
         )
         return _no_store(jsonify(payload)), status
 
@@ -711,6 +797,13 @@ def create_app() -> Flask:
             return _no_store(_error("注册入口未解锁或已过期", 403))
 
         username = normalize_username(data.get("username", ""))
+        pending = session.get("oauth_request", {})
+        if data.get("oauth") and (
+            pending.get("screen_hint") != "signup"
+            or pending.get("expires_at", 0) < int(time.time())
+            or username != pending.get("username")
+        ):
+            return _no_store(_error("OAuth 注册用户名或会话无效", 400))
         reservation_token = secrets.token_urlsafe(24)
         if not store.reserve_username(
             username=username,
@@ -729,6 +822,9 @@ def create_app() -> Flask:
         session["registration_username"] = username
         session["registration_user_handle"] = bytes_to_base64url(user_handle)
         session["registration_reservation_token"] = reservation_token
+        session["registration_oauth_request_id"] = (
+            pending.get("request_id") if data.get("oauth") else None
+        )
         return _no_store(jsonify({"publicKey": public_key}))
 
     @app.post("/api/register/verify")
@@ -775,9 +871,18 @@ def create_app() -> Flask:
         if not user:
             _clear_registration_state()
             return _no_store(_error("用户名已注册或注册会话已过期", 409))
+        oauth_request_id = session.get("registration_oauth_request_id")
         _clear_registration_state()
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
+        pending = session.get("oauth_request", {})
+        if (
+            oauth_request_id
+            and pending.get("request_id") == oauth_request_id
+            and pending.get("screen_hint") == "signup"
+            and pending.get("username") == user.username
+        ):
+            session["oauth_request"] = {**pending, "authenticated_user_id": user.id}
         session["management_reauthenticated_at"] = int(time.time())
         action_token = _issue_action_token(store, user, reuse_session=False)
         return _no_store(jsonify({"ok": True, "action_token": action_token}))
@@ -791,6 +896,9 @@ def create_app() -> Flask:
         mode = data.get("mode", "login")
         if mode not in {"login", "reauth", "code", "challenge"}:
             return _error("无效的 Passkey 验证模式", 400)
+        pending = session.get("oauth_request", {})
+        if mode == "code" and pending.get("username") and username != pending["username"]:
+            return _error("OAuth 登录用户名不匹配", 400)
         credentials = None
         expected_user = _current_user(store, session) if mode == "reauth" else None
         if mode == "reauth":
@@ -831,6 +939,9 @@ def create_app() -> Flask:
             expected_user.id if expected_user else user.id if username else None
         )
         session["authentication_mode"] = mode
+        session["authentication_oauth_request_id"] = (
+            pending.get("request_id") if mode == "code" else None
+        )
         return jsonify({"publicKey": public_key})
 
     @app.post("/auth/passkey/verify")
@@ -915,12 +1026,21 @@ def create_app() -> Flask:
             return _error("此账户当前不允许登录", 403)
 
         store.update_sign_count(result.credential_id, result.new_sign_count)
+        oauth_request_id = session.pop("authentication_oauth_request_id", None)
         session.pop("authentication_challenge", None)
         session.pop("authentication_user_id", None)
         session.pop("authentication_mode", None)
         session.pop("auth_flow_token", None)
         session["signed_in_user_id"] = user.id
         session["signed_in_session_version"] = user.session_version
+        pending = session.get("oauth_request", {})
+        if (
+            mode == "code"
+            and oauth_request_id
+            and pending.get("request_id") == oauth_request_id
+            and not pending.get("screen_hint")
+        ):
+            session["oauth_request"] = {**pending, "authenticated_user_id": user.id}
         session["management_reauthenticated_at"] = int(time.time())
         action_token = _issue_action_token(
             store,
@@ -1448,6 +1568,7 @@ def _exchange_authorization_code(
     client_id: str,
     client_secret: str,
     redirect_uri: str,
+    code_verifier: str = "",
 ) -> tuple[dict, int]:
     client = _oauth_client(app, client_id)
     if not client or not store.verify_oauth_client_secret(client_id, client_secret or ""):
@@ -1463,6 +1584,11 @@ def _exchange_authorization_code(
             "error": "invalid_grant",
             "error_description": "redirect_uri 不匹配",
         }, 400
+
+    if not verify_code_pkce(
+        app.secret_key, code, code_verifier, app.config["PASSKEY_OAUTH_CODE_TTL_SECONDS"]
+    ):
+        return {"ok": False, "error": "invalid_grant", "error_description": "PKCE 验证失败"}, 400
 
     oauth_code = store.consume_oauth_authorization_code(
         code=code,
@@ -1783,6 +1909,7 @@ def _clear_registration_unlock() -> None:
 
 
 def _clear_registration_state() -> None:
+    session.pop("registration_oauth_request_id", None)
     session.pop("registration_challenge", None)
     session.pop("registration_username", None)
     session.pop("registration_user_handle", None)

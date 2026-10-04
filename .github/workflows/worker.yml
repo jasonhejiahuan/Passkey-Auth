@@ -1,0 +1,25 @@
+name: Native Worker
+on:
+  push:
+    paths: ['worker/**', 'jstu_passkey/templates/**', 'jstu_passkey/static/**', 'jstu_passkey/register_client.py', '.github/workflows/worker.yml']
+  pull_request:
+    paths: ['worker/**', 'jstu_passkey/templates/**', 'jstu_passkey/static/**', 'jstu_passkey/register_client.py', '.github/workflows/worker.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

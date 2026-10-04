@@ -26,23 +26,28 @@ async function authorizeWithPasskey() {
   logoButton.disabled = true;
   setStatus("等待浏览器 Passkey 操作...", "muted", { autoHide: false });
   try {
-    const { publicKey } = await postJson("/auth/passkey/options", {
-      username: root.dataset.username || "",
-      mode: root.dataset.oauthMode,
-      authFlowToken: root.dataset.authFlowToken,
-    });
-    const assertion = await navigator.credentials.get({
-      publicKey: decodeRequestOptions(publicKey),
-    });
-    const verification = await postJson("/auth/passkey/verify", {
-      credential: encodeAuthenticationCredential(assertion),
-      authFlowToken: root.dataset.authFlowToken,
-    });
-    if (verification.action_token) {
-      window.sessionStorage.setItem(
-        ACTION_TOKEN_STORAGE_KEY,
-        verification.action_token,
-      );
+    if (root.dataset.screenHint === "signup") {
+      const { createPasskey } = await import("/api/ui/register-client.js");
+      await createPasskey(root.dataset.username, { oauth: true });
+    } else {
+      const { publicKey } = await postJson("/auth/passkey/options", {
+        username: root.dataset.username || "",
+        mode: root.dataset.oauthMode,
+        authFlowToken: root.dataset.authFlowToken,
+      });
+      const assertion = await navigator.credentials.get({
+        publicKey: decodeRequestOptions(publicKey),
+      });
+      const verification = await postJson("/auth/passkey/verify", {
+        credential: encodeAuthenticationCredential(assertion),
+        authFlowToken: root.dataset.authFlowToken,
+      });
+      if (verification.action_token) {
+        window.sessionStorage.setItem(
+          ACTION_TOKEN_STORAGE_KEY,
+          verification.action_token,
+        );
+      }
     }
     let result;
     if (root.dataset.oauthMode === "challenge") {
@@ -65,7 +70,7 @@ async function authorizeWithPasskey() {
       const target = new URL(root.dataset.errorRedirectUri);
       target.searchParams.set(
         "error",
-        isPasskeyCancelError(error) ? "access_denied" : "authentication_failed",
+        oauthErrorCode(error),
       );
       target.searchParams.set(
         "error_description",
@@ -95,7 +100,7 @@ async function postJson(url, body) {
   });
   const data = await readJsonResponse(response);
   if (!response.ok) {
-    throw new Error(data.error || "请求失败");
+    throw Object.assign(new Error(data.error || "请求失败"), {code: data.code, status: response.status});
   }
   return data;
 }
@@ -106,12 +111,7 @@ async function readJsonResponse(response) {
     return response.json();
   }
 
-  const text = await response.text();
-  const fallback = text ? text.slice(0, 160) : response.statusText;
-  return {
-    ok: false,
-    error: `服务器返回了非 JSON 响应：${response.status} ${fallback}`,
-  };
+  return {ok: false, code: "server_error", error: "认证服务暂时不可用"};
 }
 
 function decodeRequestOptions(options) {
@@ -169,6 +169,13 @@ function bufferToBase64url(buffer) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+}
+
+function oauthErrorCode(error) {
+  if (error?.code === "registration_not_allowed") return "registration_not_allowed";
+  if (error?.status >= 500 || error?.code === "server_error") return "server_error";
+  if (error instanceof TypeError) return "temporarily_unavailable";
+  return isPasskeyCancelError(error) ? "access_denied" : "authentication_failed";
 }
 
 function isPasskeyCancelError(error) {

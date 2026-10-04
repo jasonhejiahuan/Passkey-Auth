@@ -76,6 +76,23 @@ class PublicPageTest(unittest.TestCase):
         self.assertIn("window.location.reload()", body)
         self.assertIn("refreshSession({ refreshNonHome: true })", body)
 
+    def test_home_script_starts_passkey_on_current_page(self):
+        response = self.client.get("/static/main.js")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('postJson("/auth/passkey/flow", {})', body)
+        self.assertIn('postJson("/auth/passkey/options"', body)
+        self.assertIn("navigator.credentials.get", body)
+        self.assertIn("redirectToPasskeyPage();", body)
+
+    def test_oauth_authorize_script_still_auto_starts_passkey(self):
+        response = self.client.get("/static/oauth_authorize.js")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("authorizeWithPasskey();", body)
+
     def test_oauth_authorize_uses_jason_passkey_title(self):
         query = urlencode(
             {
@@ -102,6 +119,26 @@ class PublicPageTest(unittest.TestCase):
         self.assertIn('data-oauth-mode="login"', body)
         self.assertIn('data-return-to="/"', body)
         self.assertIn("data-auth-flow-token=", body)
+
+    def test_passkey_flow_token_starts_auth_options(self):
+        flow_response = self.client.post("/auth/passkey/flow", json={})
+
+        self.assertEqual(flow_response.status_code, 200)
+        auth_flow_token = flow_response.get_json()["authFlowToken"]
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["auth_flow_token"], auth_flow_token)
+
+        options_response = self.client.post(
+            "/auth/passkey/options",
+            json={
+                "mode": "login",
+                "username": "",
+                "authFlowToken": auth_flow_token,
+            },
+        )
+
+        self.assertEqual(options_response.status_code, 200)
+        self.assertIn("publicKey", options_response.get_json())
 
     def test_legacy_login_api_is_removed(self):
         self.assertEqual(self.client.post("/api/login/options").status_code, 404)

@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up Jason Passkey authentication database
+After=jason-passkey-auth.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/backup-jason-auth.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/jason-passkey-auth

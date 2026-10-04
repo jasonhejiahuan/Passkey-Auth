@@ -21,6 +21,7 @@
         {% endif %}
 
         <form class="login-form" method="post" action="{{ url_for('link_login_start') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="field-label" for="username">Username</label>
           <input
             id="username"

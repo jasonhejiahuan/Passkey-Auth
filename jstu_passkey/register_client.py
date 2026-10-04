@@ -68,22 +68,27 @@ function ensureRegisterPanel(config) {
 
 async function registerPasskey() {
   await runRegisterAction(async () => {
-    const username = getUsername();
-    const { publicKey } = await postJson("/api/register/options", {
-      username,
-    });
-    const credential = await navigator.credentials.create({
-      publicKey: decodeCreationOptions(publicKey),
-    });
-
-    const payload = { credential: encodeRegistrationCredential(credential) };
-    const result = await postJson("/api/register/verify", payload);
-    if (result.action_token) {
-      window.sessionStorage.setItem("passkey-action-token", result.action_token);
-    }
+    await createPasskey(getUsername());
     hideRegisterPanel();
     document.dispatchEvent(new Event("passkey-session-changed"));
   });
+}
+
+export async function createPasskey(username, { oauth = false } = {}) {
+  const { publicKey } = await postJson("/api/register/options", {
+    username,
+    oauth,
+  });
+  const credential = await navigator.credentials.create({
+    publicKey: decodeCreationOptions(publicKey),
+  });
+
+  const payload = { credential: encodeRegistrationCredential(credential) };
+  const result = await postJson("/api/register/verify", payload);
+  if (result.action_token) {
+    window.sessionStorage.setItem("passkey-action-token", result.action_token);
+  }
+  return result;
 }
 
 async function runRegisterAction(action) {
@@ -123,7 +128,7 @@ async function postJson(url, body) {
   });
   const data = await readJsonResponse(response);
   if (!response.ok) {
-    throw new Error(data.error || "请求失败");
+    throw Object.assign(new Error(data.error || "请求失败"), {code: data.code, status: response.status});
   }
   return data;
 }
@@ -134,12 +139,7 @@ async function readJsonResponse(response) {
     return response.json();
   }
 
-  const text = await response.text();
-  const fallback = text ? text.slice(0, 160) : response.statusText;
-  return {
-    ok: false,
-    error: `服务器返回了非 JSON 响应：${response.status} ${fallback}`,
-  };
+  return {ok: false, code: "server_error", error: "认证服务暂时不可用"};
 }
 
 function decodeCreationOptions(options) {

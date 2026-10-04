@@ -1,0 +1,16 @@
+<dialog id="account-passkeys-dialog" class="account-passkeys-dialog" aria-labelledby="account-passkeys-title">
+  <header class="account-passkeys-heading">
+    <h2 id="account-passkeys-title">Passkeys</h2>
+    <button id="account-passkeys-close" type="button" aria-label="关闭">×</button>
+  </header>
+  <ul id="account-passkeys-list" class="account-passkeys-list"></ul>
+  <label class="account-passkeys-destination" for="account-passkeys-authenticator">
+    <span>保存到</span>
+    <select id="account-passkeys-authenticator">
+      <option value="">自动选择</option>
+      <option value="security-key">安全密钥（USB / NFC）</option>
+    </select>
+  </label>
+  <output id="account-passkeys-status" role="status" aria-live="polite" hidden></output>
+  <button id="account-passkeys-add" type="button">添加 Passkey</button>
+</dialog>

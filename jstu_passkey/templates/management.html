@@ -7,6 +7,10 @@
     <title>Passkey Management</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='management.css') }}">
     <script defer src="{{ url_for('static', filename='management.js') }}"></script>
+    {% if account_passkeys_enabled %}
+      <link rel="stylesheet" href="{{ url_for('static', filename='account_passkeys.css') }}">
+      <script defer src="{{ url_for('static', filename='account_passkeys.js') }}"></script>
+    {% endif %}
   </head>
   <body>
     <div class="management-shell">
@@ -35,6 +39,9 @@
           <button class="nav-item" data-view="passkey-settings">Passkey 高级设置</button>
         </nav>
         <div class="sidebar-actions">
+          {% if account_passkeys_enabled %}
+            <button id="account-passkeys-button" class="quiet-button" type="button">我的 Passkeys</button>
+          {% endif %}
           <button id="refresh-button" class="quiet-button">刷新数据</button>
           <button id="logout-button" class="logout-button">退出登录</button>
         </div>
@@ -447,5 +454,6 @@
       </form>
     </dialog>
 
+    {% if account_passkeys_enabled %}{% include "_account_passkeys.html" %}{% endif %}
   </body>
 </html>

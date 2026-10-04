@@ -5,6 +5,10 @@
 {% block head_extra %}
   {% if home_auth_enabled %}
     <script defer src="{{ url_for('static', filename='main.js') }}"></script>
+    {% if account_passkeys_enabled %}
+      <link rel="stylesheet" href="{{ url_for('static', filename='account_passkeys.css') }}">
+      <script defer src="{{ url_for('static', filename='account_passkeys.js') }}"></script>
+    {% endif %}
   {% endif %}
 {% endblock %}
 
@@ -19,5 +23,9 @@
 {% block status %}
   {% if home_auth_enabled %}
     <output id="status" class="status" role="status" aria-live="polite" hidden></output>
+    {% if account_passkeys_enabled %}
+      <button id="account-passkeys-button" class="account-passkeys-trigger" type="button"{% if not account_signed_in %} hidden{% endif %}>Passkeys</button>
+      {% include "_account_passkeys.html" %}
+    {% endif %}
   {% endif %}
 {% endblock %}
